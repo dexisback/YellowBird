@@ -16,12 +16,14 @@ type Server struct {
 
 
 func New(cfg *config.Config) *Server{
-	engine := gin.New()
+	engine := gin.New()  //because private , nobody outside the server package should be able to access this 
 
 	server := &Server{
 		engine: engine, 
 		config: cfg, 
 	}
+
+	server.registerRoutes()
 
 	return server 
 
@@ -36,3 +38,6 @@ func (s *Server) Run() error{
 
 
 
+
+//instead of engine.Run() , main.go will only do srv.Run(). this hides gin from rest of the application 
+//
