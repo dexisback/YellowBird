@@ -6,16 +6,23 @@ import (
 	"log"
 
 	"github.com/dexisback/YellowBird/internal/config"
+	"github.com/dexisback/YellowBird/internal/db"
 	"github.com/dexisback/YellowBird/internal/server"
 )
 
 func main() {
 	cfg, err := config.Load()
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	server := server.New(cfg)
+	db, err := db.Connect(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	server := server.New(cfg, db)
 	server.Run()
 
 	//else:

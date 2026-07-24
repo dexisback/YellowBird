@@ -6,14 +6,16 @@ import (
 	"github.com/dexisback/YellowBird/internal/config"
 	"github.com/dexisback/YellowBird/internal/server/middleware"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type Server struct {
 	engine *gin.Engine
 	config *config.Config
+	db     *gorm.DB
 }
 
-func New(cfg *config.Config) *Server {
+func New(cfg *config.Config, db *gorm.DB) *Server {
 	engine := gin.New() //because private , nobody outside the server package should be able to access this
 
 	engine.Use(
