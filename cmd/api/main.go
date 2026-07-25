@@ -22,6 +22,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if err := db.AutoMigrate(db) ; err != nil{
+		log.Fatal(err)
+	}
+
 	server := server.New(cfg, db)
 	server.Run()
 
