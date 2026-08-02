@@ -17,7 +17,7 @@ func NewHandler(service Service) *Handler {
 	}
 }
 
-func (h *Handler) Registeruser(c *gin.Context) {
+func (h *Handler) RegisterUser(c *gin.Context) {
 	var req RegisterUserRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -59,7 +59,7 @@ func (h *Handler) LoginUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
-func (h *Handler) ListUser(c *gin.Context) {
+func (h *Handler) ListUsers(c *gin.Context) {
 	users, err := h.service.ListUsers(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/dexisback/YellowBird/internal/config"
-	"github.com/dexisback/YellowBird/internal/db"
+	dbpkg "github.com/dexisback/YellowBird/internal/db"
 	"github.com/dexisback/YellowBird/internal/server"
 )
 
@@ -17,12 +17,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	db, err := db.Connect(cfg)
+	db, err := dbpkg.Connect(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := db.AutoMigrate(db) ; err != nil{
+	// if err := db.AutoMigrate(db) ; err != nil{
+	// 	log.Fatal(err)
+	// }
+
+	if err := dbpkg.Migrate(db); err != nil {
 		log.Fatal(err)
 	}
 

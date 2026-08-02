@@ -1,6 +1,6 @@
 # Environment
 .env
-.env.*
+
 
 # Binaries
 /bin/

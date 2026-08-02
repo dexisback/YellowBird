@@ -5,7 +5,6 @@ import (
 
 	"github.com/dexisback/YellowBird/internal/config"
 	"github.com/dexisback/YellowBird/internal/server/middleware"
-	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -28,7 +27,7 @@ func New(cfg *config.Config, db *gorm.DB) *Server {
 	server := &Server{
 		engine: engine,
 		config: cfg,
-		db : db,
+		db:     db,
 	}
 
 	server.registerRoutes()
@@ -37,8 +36,6 @@ func New(cfg *config.Config, db *gorm.DB) *Server {
 
 }
 
-
-
 func (s *Server) Run() error {
 	address := fmt.Sprintf(":%s", s.config.Port)
 
@@ -46,6 +43,3 @@ func (s *Server) Run() error {
 }
 
 //instead of engine.Run() , main.go will only do srv.Run(). this hides gin from rest of the application
-
-
-

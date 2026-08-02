@@ -3,7 +3,7 @@ package user
 import (
 	"context"
 	"errors"
-
+	"github.com/dexisback/YellowBird/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -19,11 +19,13 @@ type Service interface {
 
 type service struct {
 	repository Repository
+	jwtService   *auth.JWTService
 }
 
-func NewService(repository Repository) Service {
+func NewService(repository Repository, jwtService *auth.JWTService) Service {
 	return &service{
 		repository: repository,
+		jwtService: jwtService,
 	}
 }
 
