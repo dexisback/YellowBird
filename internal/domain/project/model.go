@@ -16,9 +16,12 @@ import (
 
 type Project struct {
 	ID     uuid.UUID    `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+	OwnerID uuid.UUID   `gorm:"type:uuid;not null;index"`
+	
 	Name   string     `gorm:"size:255;not null"`
 	Description   string    `gorm:"type:text"`
 	CreatedAt    time.Time 
 	UpdatedAt    time.Time 
+
 	
 }

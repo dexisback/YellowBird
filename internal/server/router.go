@@ -26,7 +26,7 @@ func (s *Server) registerRoutes() {
 	projectService := project.NewService(projectRepository)
 	projectHandler := project.NewHandler(projectService)
 
-	project.RegisterRoutes(api, projectHandler)
+	project.RegisterRoutes(api, projectHandler, jwtService)
 
 
 	//user kundli:
@@ -34,7 +34,7 @@ func (s *Server) registerRoutes() {
 	userService := user.NewService(userRepository, jwtService)
 	userHandler := user.NewHandler(userService)
 	user.RegisterRoutes(api, userHandler)
-	
+
 }
 
 func healthHandler(c *gin.Context) {
