@@ -9,9 +9,9 @@ import (
 
 
 type Service interface{
-	CreateProject(ctx context.Context, req CreateProjectRequest) (*ProjectResponse, error)
+	CreateProject(ctx context.Context, ownerID uuid.UUID,  req CreateProjectRequest) (*ProjectResponse, error)  //now a project accepts userId aswell
 	GetProject (ctx context.Context, id uuid.UUID) (*ProjectResponse, error)
-	ListProjects(ctx context.Context) ([]ProjectResponse, error)
+	ListProjects(ctx context.Context, ownerID uuid.UUID) ([]ProjectResponse, error)
 	UpdateProject(ctx context.Context, id uuid.UUID, req UpdateProjectRequest) (*ProjectResponse, error)
 	DeleteProject(ctx context.Context, id uuid.UUID) error 
 }
@@ -28,9 +28,12 @@ func NewService(repository Repository) Service {
 }
 
 
+//earlier it was this line -> func (s *service) CreateProject(ctx context.Context, req CreateProjectRequest) (*ProjectResponse, error ){
 
-func (s *service) CreateProject(ctx context.Context, req CreateProjectRequest) (*ProjectResponse, error ){
+//now it is this line -> CreateProject(ctx context.Context, ownerID uuid.UUID, req CreateProjectRequest) (*ProjectResponse, error)   (so project now accepts an authenticated user)
+func (s *service) CreateProject(ctx context.Context, ownerID uuid.UUID, req CreateProjectRequest) (*ProjectResponse, error ){
 	project := &Project{
+		OwnerID: ownerID, 
 		Name:   req.Name , 
 		Description: req.Description,
 	}
@@ -66,8 +69,8 @@ func (s *service) GetProject(ctx context.Context, id uuid.UUID) (*ProjectRespons
 
 
 
-func (s *service) ListProjects(ctx context.Context) ([]ProjectResponse, error){
-	project, err := s.repository.List(ctx)
+func (s *service) ListProjects(ctx context.Context, ownerID uuid.UUID) ([]ProjectResponse, error){
+	project, err := s.repository.List(ctx, ownerID)
 	if err != nil{
 		return nil, err
 	}

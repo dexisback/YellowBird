@@ -27,8 +27,23 @@ func (h *Handler) CreateProject(c *gin.Context) {
 		return
 	}
 
-	//else
-	project, err := h.service.CreateProject(c.Request.Context(), req)
+	ownerIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "missing authenticated user",
+		})
+		return
+	}
+
+	ownerID, ok := ownerIDValue.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "invalid authenticated user",
+		})
+		return
+	}
+
+	project, err := h.service.CreateProject(c.Request.Context(), ownerID, req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
@@ -61,7 +76,23 @@ func (h *Handler) GetProject(c *gin.Context) {
 }
 
 func (h *Handler) ListProjects(c *gin.Context) {
-	projects, err := h.service.ListProjects(c.Request.Context())
+	ownerIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "missing authenticated user",
+		})
+		return
+	}
+
+	ownerID, ok := ownerIDValue.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "invalid authenticated user",
+		})
+		return
+	}
+
+	projects, err := h.service.ListProjects(c.Request.Context(), ownerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
@@ -117,6 +148,3 @@ func (h *Handler) DeleteProject(c *gin.Context) {
 
 	c.Status(http.StatusNoContent)
 }
-
-
-

@@ -10,7 +10,7 @@ import (
 type Repository interface {
 	Create(ctx context.Context, project *Project) error
 	GetByID(ctx context.Context, id uuid.UUID) (*Project, error)
-	List(ctx context.Context) ([]Project, error)
+	List(ctx context.Context, ownerID uuid.UUID) ([]Project, error)
 	Update(ctx context.Context, project *Project) error 
 	Delete(ctx context.Context, id uuid.UUID) error 
 }
@@ -44,12 +44,13 @@ func (r *repository) GetByID(ctx context.Context, id uuid.UUID) (*Project, error
 	return &project, nil
 }
 
-
-func (r *repository) List(ctx context.Context) ([]Project, error){
+//before auth middleware -> gave every project
+//after auth middleware -> gives only the project owned by a particular authenticated user  
+func (r *repository) List(ctx context.Context, ownerID uuid.UUID) ([]Project, error){
 	var projects []Project 
 
 
-	err := r.db.WithContext(ctx).Find(&projects).Error
+	err := r.db.WithContext(ctx).Where("owner_id= ?", ownerID).Find(&projects).Error
 	if err !=nil{
 		return nil, err
 	}
@@ -66,3 +67,5 @@ func (r *repository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&Project{}, "id = ?", id).Error
 
 }
+
+
