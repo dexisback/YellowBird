@@ -55,23 +55,48 @@ func (h *Handler) CreateProject(c *gin.Context) {
 }
 
 func (h *Handler) GetProject(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
+	// id, err := uuid.Parse(c.Param("id"))
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid project id",
-		})
-		return
+	// if err != nil {
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": "invalid project id",
+	// 	})
+	// 	return
+	// }
+
+	// project, err := h.service.GetProject(c.Request.Context(), id)
+	// if err != nil {
+	// 	c.JSON(http.StatusNotFound, gin.H{
+	// 		"error": err.Error(),
+	// 	})
+	// 	return
+	// }
+
+	// c.JSON(http.StatusOK, project)
+	ownerIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized , gin.H{"error": "unauthorised ownerid"})
+		return 
+	} 
+
+	ownerID, ok := ownerIDValue.(uuid.UUID)
+
+	if !ok{
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauth man"})
+		return 
 	}
 
-	project, err := h.service.GetProject(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": err.Error(),
-		})
-		return
+	id , err := uuid.Parse(c.Param("id"))
+	if err != nil{
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unable to parse id"})
+		return 
 	}
 
+	project, err := h.service.GetProject(c.Request.Context(), ownerID, id)
+	if err != nil{
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return 
+	}
 	c.JSON(http.StatusOK, project)
 }
 
@@ -105,6 +130,18 @@ func (h *Handler) ListProjects(c *gin.Context) {
 }
 
 func (h *Handler) UpdateProject(c *gin.Context) {
+	ownerIDValue, exists := c.Get("userID")
+	if !exists{
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user :("})
+		return 
+	}
+	ownerID, ok := ownerIDValue.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authenticated user"})
+		return 
+
+	}
+
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -120,7 +157,7 @@ func (h *Handler) UpdateProject(c *gin.Context) {
 		})
 		return
 	}
-	project, err := h.service.UpdateProject(c.Request.Context(), id, req)
+	project, err := h.service.UpdateProject(c.Request.Context(), ownerID, id, req,)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -130,16 +167,30 @@ func (h *Handler) UpdateProject(c *gin.Context) {
 	c.JSON(http.StatusOK, project)
 }
 
+
+
+
 func (h *Handler) DeleteProject(c *gin.Context) {
+	ownerIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user"})
+		return 
+	}
+
+	ownerID, ok := ownerIDValue.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authenticated user"})
+		return 
+	}
+
+
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid project id",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id",})
 		return
 	}
 
-	if err := h.service.DeleteProject(c.Request.Context(), id); err != nil {
+	if err := h.service.DeleteProject(c.Request.Context(), ownerID, id, ); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
