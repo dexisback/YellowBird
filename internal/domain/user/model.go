@@ -1,3 +1,10 @@
+//user is well, users -> (register, login, list, delete, get) users
+
+
+
+
+
+
 package user
 
 import (

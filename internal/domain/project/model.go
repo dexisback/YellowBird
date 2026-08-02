@@ -1,3 +1,7 @@
+//project domain -> responsible for everything related to projects (create project/list projects/update proejct/delete project/get project)
+//a user owns a project (uploaded media)
+
+
 package project 
 
 
