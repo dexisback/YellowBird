@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/dexisback/YellowBird/internal/domain/user"
 
@@ -26,5 +27,6 @@ func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&project.Project{},
 		&user.User{},
+		&media.Media{},
 	)
 }

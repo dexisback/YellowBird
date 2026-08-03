@@ -19,11 +19,12 @@ const (
 )
 
 type Media struct {
-	ID               uuid.UUID   `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
-	ProjectId        uuid.UUID   `gorm:"type:uuid;not null;index"`
-	OriginalFileName string      `gorm:"size:255;not null"`
-	StorageKey       string      `gorm:"size:500;not null; unique"`
-	MimeType         string      `gorm:"size:255;not null"`
+	ID               uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
+	ProjectId        uuid.UUID `gorm:"type:uuid;not null;index"`
+	OriginalFileName string    `gorm:"size:255;not null"`
+	StorageKey       string    `gorm:"size:500;not null; unique"`
+	MimeType         string    `gorm:"size:255;not null"`
+	Size             int64
 	Status           MediaStatus `gorm:"size:255;not null"`
 	DurationSeconds  *float64
 	Width            *int
