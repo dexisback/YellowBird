@@ -53,6 +53,11 @@ func (r *repository) ListByProject(
 	if err != nil {
 		return nil, err
 	}
+
+	if media == nil {
+		media = []Media{}
+	}
+
 	return media, nil
 }
 
@@ -67,5 +72,5 @@ func (r *repository) Delete(
 	ctx context.Context,
 	id uuid.UUID,
 ) error {
-	return r.db.WithContext(ctx).Delete(&Media{}, "id = ?", id).Error
+	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&Media{}).Error
 }

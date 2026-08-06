@@ -6,6 +6,7 @@ import (
 
 	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type Service interface {
@@ -68,7 +69,10 @@ func (s *service) CreateMedia(
 	)
 
 	if err != nil {
-		return nil, errors.New("project not found")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("project not found")
+		}
+		return nil, err
 	}
 
 	media := &Media{

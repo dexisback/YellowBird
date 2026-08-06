@@ -82,7 +82,15 @@ func (h *Handler) GetMedia(c *gin.Context) {
 }
 
 func (h *Handler) ListMedia(c *gin.Context) {
-	projectID, err := uuid.Parse(c.Query("project_id"))
+	projectIDParam := c.Query("project_id")
+	if projectIDParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "missing project_id query parameter",
+		})
+		return
+	}
+
+	projectID, err := uuid.Parse(projectIDParam)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "invalid project id",

@@ -2,8 +2,7 @@ package storage
 
 //what this does -> defines the contract that every storage provider (cloudinary/s3/the stealth wala im gonna be using/local disk) must implement
 // //scalable
-//
-//
+
 import (
 	"context"
 	"mime/multipart"
