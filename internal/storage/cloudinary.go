@@ -67,7 +67,9 @@ func (s *CloudinaryStorage) Delete(
 	ctx context.Context,
 	storageKey string,
 ) error {
-	_, err := s.Client.Upload > Destroy(
+	_, err := s.client.Upload.Destroy(
 		ctx,
+		uploader.DestroyParams{PublicID: storageKey},
 	)
+	return err
 }
