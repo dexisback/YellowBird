@@ -73,3 +73,17 @@ func (s *CloudinaryStorage) Delete(
 	)
 	return err
 }
+
+
+//add new geturl for thumbnail.go
+func (s *CloudinaryStorage) GetURL (
+	ctx context.Context, 
+	storageKey string,
+) (string, error){
+
+	image, err := s.client.Image(storageKey)
+	if err != nil{
+		return "", err
+	}
+	return image.String()
+}

@@ -26,4 +26,6 @@ type UploadResult struct {
 type Storage interface {
 	Upload(ctx context.Context, input UploadInput) (*UploadResult, error)
 	Delete(ctx context.Context, storageKey string) error
+	GetURL(ctx context.Context, storageKey string) (string, error)  //add new for thumbnail.go
+
 }
