@@ -30,7 +30,7 @@ func (s *CloudinaryStorage) Upload(
 ) (*UploadResult, error) {
 	result, err := s.client.Upload.Upload(
 		ctx,
-		input.File,
+		input.Reader,
 		uploader.UploadParams{
 			PublicID: input.FileName,
 			Folder:   "YellowBird",
@@ -40,14 +40,7 @@ func (s *CloudinaryStorage) Upload(
 	}
 
 	originalFileName := input.FileName
-	if input.Header != nil && input.Header.Filename != "" {
-		originalFileName = input.Header.Filename
-	}
-
-	mimeType := ""
-	if input.Header != nil {
-		mimeType = input.Header.Header.Get("Content-Type")
-	}
+	mimeType := input.MimeType
 
 	// cloudinary upload result contains the size in Bytes. Use it as the canonical size.
 	var size int64 = int64(result.Bytes)

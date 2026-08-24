@@ -1,19 +1,26 @@
 package storage
 
+//NOTE: why io.reader? because the current (the before version ) of UploadInput is tied to a multipart.File, which works for HTTP file but fails for a worker generated thumbnail.
+//a worker has a normal file/reader, not a multipart request. we therefore update all with io.reader now instead of multipart because now worker is going to be using it aswell
+
 //what this does -> defines the contract that every storage provider (cloudinary/s3/the stealth wala im gonna be using/local disk) must implement
 // //scalable
 
 import (
 	"context"
 	"io"
+
 	// "io"
-	"mime/multipart"
+	// "mime/multipart"
 )
 
 type UploadInput struct {
-	File     multipart.File
-	Header   *multipart.FileHeader
-	FileName string
+	// File     multipart.File
+	Reader   io.Reader
+	FileName string 
+	MimeType   string 
+	// Header   *multipart.FileHeader
+	// FileName string
 }
 
 type UploadResult struct {
@@ -28,8 +35,8 @@ type UploadResult struct {
 type Storage interface {
 	Upload(ctx context.Context, input UploadInput) (*UploadResult, error)
 	Delete(ctx context.Context, storageKey string) error
-	GetURL(ctx context.Context, storageKey string) (string, error) //add new for thumbnail.go
-	Download(ctx context.Context, storageKey string, mimeType string) (io.ReadCloser, error)//retrieve file for FFmpeg, to get the actual bytes of the file 
+	GetURL(ctx context.Context, storageKey string) (string, error)                           //add new for thumbnail.go
+	Download(ctx context.Context, storageKey string, mimeType string) (io.ReadCloser, error) //retrieve file for FFmpeg, to get the actual bytes of the file
 
 }
 
