@@ -9,11 +9,21 @@ package worker
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/google/uuid"
 )
+//new, job retry logic
+const (
+	maxJobRetries    = 3
+	recoveryInterval = (30 * time.Second)
+)
+
+
+
+
 
 type Worker struct {
 	queue      *queue.RedisQueue
@@ -34,9 +44,30 @@ func NewWorker(
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	log.Println("worker started")
+	log.Println("worker started brrr")
+	//first we gotta make sure if the redis consumer group even exists before init:
+	if err := w.queue.EnsureGroup(ctx); err != nil{
+		return err
+	}
+
+	//new: periodically recover messages abandoned by previously crashed workers
+	recoveryTicker := time.NewTicker(recoveryInterval)
+	defer  recoveryTicker.Stop()
+
 	for {
-		jobID, err := w.queue.Dequeue(ctx)
+		select {
+		case <-ctx.Done():
+			log.Println("worker shutting down")
+			return ctx.Err()
+		case <-recoveryTicker.C:
+			if err := w.recoverPending(ctx); err != nil {
+				log.Printf("failed to recover pending jobs: %v", err)
+			}
+			continue
+		default:
+		}
+
+		messageID, jobID, err := w.queue.Dequeue(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				log.Println("worker shutting down")
@@ -46,7 +77,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 
-		if err := w.processJob(ctx, jobID); err != nil {
+		if err := w.processJob(ctx, messageID, jobID); err != nil {
 			log.Printf("failed to process job %s: %v", jobID, err)
 		}
 	}
@@ -54,6 +85,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) processJob(
 	ctx context.Context,
+	messageID string,
 	jobID uuid.UUID,
 ) error {
 	currentJob, err := w.jobService.GetJobEntity(ctx, jobID)
@@ -65,15 +97,14 @@ func (w *Worker) processJob(
 	//this protects against duplicate/stale redis messages:
 
 	if currentJob.Status != job.StatusQueued {
-		log.Printf("skipping job %s with status %s", jobID, currentJob.Status,)
-		return nil
+		log.Printf("skipping job %s with status %s", jobID, currentJob.Status)
+		return w.queue.Ack(ctx, messageID)
 	}
-
 
 	processor, err := w.registry.Get(currentJob.Type)
 	if err != nil {
 		_ = w.jobService.FailJob(ctx, jobID, err.Error())
-		return err
+		return w.queue.MoveToDLQ(ctx, messageID, jobID, err.Error())
 	}
 
 	if err := w.jobService.StartJob(ctx, jobID); err != nil {
@@ -81,14 +112,58 @@ func (w *Worker) processJob(
 	}
 
 	if err := processor.Process(ctx, currentJob); err != nil {
-		if updateErr := w.jobService.FailJob(ctx, jobID, err.Error()); updateErr != nil {
-			log.Printf("failed to mark job %s as failed: %v", jobID, updateErr)
-		}
-		return err
+		return w.handleJobFailure(ctx, messageID, jobID, err)
 	}
 
 	if err := w.jobService.CompleteJob(ctx, jobID); err != nil {
 		return err
+	}
+
+	//new: only ack after processing + db completion succeeded
+	if err := w.queue.Ack(ctx, messageID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+//new: mark the job failed in postgres, then move it to the dlq
+func (w *Worker) handleJobFailure(
+	ctx context.Context,
+	messageID string,
+	jobID uuid.UUID,
+	processErr error,
+) error {
+	if err := w.jobService.FailJob(ctx, jobID, processErr.Error()); err != nil {
+		log.Printf("failed to mark job %s as failed: %v", jobID, err)
+	}
+
+	return w.queue.MoveToDLQ(ctx, messageID, jobID, processErr.Error())
+}
+
+//new: reclaim messages abandoned by crashed workers
+func (w *Worker) recoverPending(ctx context.Context) error {
+	pending, err := w.queue.Pending(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, message := range pending {
+		if message.Idle < 5*time.Minute {
+			continue
+		}
+
+		jobID, err := w.queue.Claim(ctx, message.ID)
+		if err != nil {
+			log.Printf("failed to reclaim message %s: %v", message.ID, err)
+			continue
+		}
+
+		log.Printf("reclaimed abandoned job %s", jobID)
+
+		if err := w.processJob(ctx, message.ID, jobID); err != nil {
+			log.Printf("failed to process reclaimed job %s: %v", jobID, err)
+		}
 	}
 
 	return nil

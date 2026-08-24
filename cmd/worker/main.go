@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 
 	"github.com/dexisback/YellowBird/internal/config"
 	dbpkg "github.com/dexisback/YellowBird/internal/db"
@@ -26,7 +28,13 @@ func main() {
 	}
 
 	// worker gets its own redis queue connection:
-	redisQueue := queue.NewRedisQueue(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "worker"
+	}
+	consumer := fmt.Sprintf("%s-%d", hostname, os.Getpid())
+
+	redisQueue := queue.NewRedisQueue(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB, consumer)
 
 	if err := redisQueue.Ping(context.Background()); err != nil {
 		log.Fatal(err)
