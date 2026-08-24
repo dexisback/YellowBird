@@ -1,2 +1,1 @@
-package worker
-om[]
+//package worker
