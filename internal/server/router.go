@@ -8,6 +8,7 @@ import (
 
 	"github.com/dexisback/YellowBird/internal/auth"
 	"github.com/dexisback/YellowBird/internal/domain/project"
+	"github.com/dexisback/YellowBird/internal/domain/rendition"
 	"github.com/dexisback/YellowBird/internal/domain/user"
 	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,11 @@ func (s *Server) registerRoutes() {
 	userHandler := user.NewHandler(userService)
 	user.RegisterRoutes(api, userHandler)
 
+	//rendntion kundli:
+	renditionRepository := rendition.NewRepository(s.db)
+	renditionService := rendition.NewService(renditionRepository)
+	renditionHandler := rendition.NewHandler(renditionService)
+	rendition.RegisterRoutes(api, renditionHandler, jwtService)
 }
 
 func healthHandler(c *gin.Context) {
