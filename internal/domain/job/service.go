@@ -4,29 +4,26 @@ import (
 	"context"
 	"errors"
 	"time"
+
 	"github.com/google/uuid"
 )
 
-
 type Service interface {
-	CreateJob(ctx context.Context, req CreateJobRequest, ) (*JobResponse, error)
-	GetJob(ctx context.Context, id uuid.UUID,) (*JobResponse, error)
-	ListJobsByMedia(ctx context.Context, mediaID uuid.UUID,) ([]JobResponse , error)
-	StartJob(ctx context.Context, id uuid.UUID, ) error 
-	UpdateProgress(ctx context.Context, id uuid.UUID, progress int,) error
-	CompleteJob (ctx context.Context, id uuid.UUID,) error
-	FailJob (ctx context.Context, id uuid.UUID, errMsg string) error
-	DeleteJob (ctx context.Context, id uuid.UUID,) error 
-
+	CreateJob(ctx context.Context, req CreateJobRequest) (*JobResponse, error)
+	GetJob(ctx context.Context, id uuid.UUID) (*JobResponse, error)
+	ListJobsByMedia(ctx context.Context, mediaID uuid.UUID) ([]JobResponse, error)
+	StartJob(ctx context.Context, id uuid.UUID) error
+	UpdateProgress(ctx context.Context, id uuid.UUID, progress int) error
+	CompleteJob(ctx context.Context, id uuid.UUID) error
+	FailJob(ctx context.Context, id uuid.UUID, errMsg string) error
+	DeleteJob(ctx context.Context, id uuid.UUID) error
 }
 
-//repository = db access, but you dont want everyone having that accewss. so we just create a repository struct each time 
+//repository = db access, but you dont want everyone having that accewss. so we just create a repository struct each time
 
 type service struct {
-	repository Repository 
+	repository Repository
 }
-
-
 
 func NewService(repository Repository) Service {
 	return &service{
@@ -38,10 +35,19 @@ func (s *service) CreateJob(
 	ctx context.Context,
 	req CreateJobRequest,
 ) (*JobResponse, error) {
+	//refine: validate the job type + target target resolution 
+	//before creating/persisting the job 
 
+
+	if err := validateCreateJobRequest(req); err != nil{
+		return nil, err 
+	}
 	job := &Job{
-		MediaID:  req.MediaID,
-		Type:     req.Type,
+		MediaID:      req.MediaID,
+		Type:         req.Type,
+		//new : targetHeight
+		TargetHeight: req.TargetHeight,
+
 		Status:   StatusQueued,
 		Progress: 0,
 	}
@@ -171,23 +177,54 @@ func (s *service) DeleteJob(
 
 func toResponse(job *Job) *JobResponse {
 	return &JobResponse{
-		ID:          job.ID,
-		MediaID:     job.MediaID,
-		Type:        job.Type,
-		Status:      job.Status,
-		Progress:    job.Progress,
-		Error:       job.Error,
-		StartedAt:   job.StartedAt,
-		CompletedAt: job.CompletedAt,
-		CreatedAt:   job.CreatedAt,
-		UpdatedAt:   job.UpdatedAt,
+		ID:           job.ID,
+		MediaID:      job.MediaID,
+		Type:         job.Type,
+		TargetHeight: job.TargetHeight,
+		Status:       job.Status,
+		Progress:     job.Progress,
+		Error:        job.Error,
+		StartedAt:    job.StartedAt,
+		CompletedAt:  job.CompletedAt,
+		CreatedAt:    job.CreatedAt,
+		UpdatedAt:    job.UpdatedAt,
 	}
 }
-
-
 
 // StartJob() → marks the job as running, sets StartedAt.
 // UpdateProgress() → updates the progress percentage.
 // CompleteJob() → sets progress to 100, marks completed, sets CompletedAt.
 // FailJob() → marks failed, stores an error message, sets CompletedAt.
 // DeleteJob() → removes the job record
+
+
+
+//new: validation function: 
+func validateCreateJobRequest(req CreateJobRequest) error {
+	switch req.Type{
+	case TypeTranscode:
+		if req.TargetHeight == nil{
+			return errors.New(
+				"target_height is required for transcode jobs", 
+			)
+		}
+		switch *req.TargetHeight{
+		case 360, 720, 1080:
+			return nil
+		default:
+			return errors.New("unsupported target height; supported values are 360, 720 and 1080")
+		 
+			
+		}
+	case TypeThumbnail, TypePreview:
+		if req.TargetHeight != nil{
+			return errors.New(
+				"target_height is only valid for transcode jobs",
+			)
+		} 
+
+		return nil
+		default:
+			return errors.New("unsupported job type")
+	}
+}
