@@ -9,7 +9,6 @@ package storage
 import (
 	"context"
 	"io"
-
 	// "io"
 	// "mime/multipart"
 )
@@ -17,8 +16,10 @@ import (
 type UploadInput struct {
 	// File     multipart.File
 	Reader   io.Reader
-	FileName string 
-	MimeType   string 
+	FileName string
+	MimeType string
+	Size     int64
+
 	// Header   *multipart.FileHeader
 	// FileName string
 }

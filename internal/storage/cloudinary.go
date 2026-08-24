@@ -42,8 +42,11 @@ func (s *CloudinaryStorage) Upload(
 	originalFileName := input.FileName
 	mimeType := input.MimeType
 
-	// cloudinary upload result contains the size in Bytes. Use it as the canonical size.
-	var size int64 = int64(result.Bytes)
+	// Cloudinary result is preferred, but keep caller-provided size as fallback.
+	size := int64(result.Bytes)
+	if size <= 0 && input.Size > 0 {
+		size = input.Size
+	}
 
 	return &UploadResult{
 		StorageKey:       result.PublicID,

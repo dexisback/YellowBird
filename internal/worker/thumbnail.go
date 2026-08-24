@@ -49,6 +49,7 @@ func (p *ThumbnailProcessor) Process(ctx context.Context, j *job.Job) error {
 		return fmt.Errorf("failed to create source temp file: %w", err)
 
 	}
+
 	defer func() {
 		sourceFile.Close()
 		os.Remove(sourceFile.Name())
@@ -80,10 +81,17 @@ func (p *ThumbnailProcessor) Process(ctx context.Context, j *job.Job) error {
 
 	}
 	defer thumbnailFile.Close()
+	info, err := thumbnailFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat generated thumbnail: %w", err)
+	}
 	// We don't have a multipart.FileHeader for the generated file; pass nil.
 	uploadResult, err := p.storage.Upload(ctx, storage.UploadInput{
-		File:     thumbnailFile,
-		Header:   nil,
+		// File:     thumbnailFile,
+		// Header:   nil,
+		Reader:   thumbnailFile,
+		MimeType: "image/jpeg",
+		Size:     info.Size(),
 		FileName: fmt.Sprintf("%s-thumbnail", j.ID.String()),
 	})
 	if err != nil {
