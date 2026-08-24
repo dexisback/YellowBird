@@ -139,7 +139,7 @@ func (p *TranscodeProcessor) Process(
 	}
 
 	_, err = p.renditionService.CreateRendition(
-		ctx, &rendition.CreateRendtionRequest{
+		ctx, rendition.CreateRendtionRequest{
 			MediaID:    j.MediaID,
 			Type:       rendition.TypeTranscode,
 			StorageKey: uploadResult.StorageKey,

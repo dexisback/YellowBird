@@ -11,6 +11,7 @@ import (
 type Service interface {
 	CreateJob(ctx context.Context, req CreateJobRequest) (*JobResponse, error)
 	GetJob(ctx context.Context, id uuid.UUID) (*JobResponse, error)
+	GetJobEntity(ctx context.Context, id uuid.UUID) (*Job, error)
 	ListJobsByMedia(ctx context.Context, mediaID uuid.UUID) ([]JobResponse, error)
 	StartJob(ctx context.Context, id uuid.UUID) error
 	UpdateProgress(ctx context.Context, id uuid.UUID, progress int) error
@@ -70,6 +71,13 @@ func (s *service) GetJob(
 	}
 
 	return toResponse(job), nil
+}
+
+func (s *service) GetJobEntity(
+	ctx context.Context,
+	id uuid.UUID,
+) (*Job, error) {
+	return s.repository.GetByID(ctx, id)
 }
 
 func (s *service) ListJobsByMedia(
