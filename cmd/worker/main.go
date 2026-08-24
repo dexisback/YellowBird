@@ -42,7 +42,7 @@ func main() {
 
 	// repositories/services needed by the processors 👇🏼
 	jobRepository := job.NewRepository(db)
-	jobService := job.NewService(jobRepository)
+	jobService := job.NewService(jobRepository, redisQueue) //add redisQueue 
 	mediaRepository := media.NewRepository(db)
 
 	renditionRepository := rendition.NewRepository(db)

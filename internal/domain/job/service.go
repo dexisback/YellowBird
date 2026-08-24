@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/google/uuid"
 )
 
@@ -24,11 +25,13 @@ type Service interface {
 
 type service struct {
 	repository Repository
+	queue *queue.RedisQueue   //jobservice now owns the transition. DB job creation -> redis job enqueu, now add this to all functions underneath
 }
 
-func NewService(repository Repository) Service {
+func NewService(repository Repository, q *queue.RedisQueue) Service {
 	return &service{
 		repository: repository,
+		queue:      q,
 	}
 }
 
@@ -36,6 +39,8 @@ func (s *service) CreateJob(
 	ctx context.Context,
 	req CreateJobRequest,
 ) (*JobResponse, error) {
+
+	
 	//refine: validate the job type + target target resolution 
 	//before creating/persisting the job 
 
@@ -57,6 +62,12 @@ func (s *service) CreateJob(
 		return nil, err
 	}
 
+	//enqueue the peristed job for the background worker 
+	if err := s.queue.Enqueue(ctx, job.ID); err != nil{
+		return nil, err
+	}
+
+
 	return toResponse(job), nil
 }
 
@@ -73,6 +84,9 @@ func (s *service) GetJob(
 	return toResponse(job), nil
 }
 
+
+
+//worker needs the actual job entity rather than the api facing job repsonse
 func (s *service) GetJobEntity(
 	ctx context.Context,
 	id uuid.UUID,
