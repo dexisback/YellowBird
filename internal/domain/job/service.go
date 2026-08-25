@@ -19,13 +19,17 @@ type Service interface {
 	CompleteJob(ctx context.Context, id uuid.UUID) error
 	FailJob(ctx context.Context, id uuid.UUID, errMsg string) error
 	DeleteJob(ctx context.Context, id uuid.UUID) error
+	RetryJob(
+	ctx context.Context,
+	id uuid.UUID,
+) error
 }
 
 //repository = db access, but you dont want everyone having that accewss. so we just create a repository struct each time
 
 type service struct {
 	repository Repository
-	queue *queue.RedisQueue   //jobservice now owns the transition. DB job creation -> redis job enqueu, now add this to all functions underneath
+	queue      *queue.RedisQueue //jobservice now owns the transition. DB job creation -> redis job enqueu, now add this to all functions underneath
 }
 
 func NewService(repository Repository, q *queue.RedisQueue) Service {
@@ -40,17 +44,15 @@ func (s *service) CreateJob(
 	req CreateJobRequest,
 ) (*JobResponse, error) {
 
-	
-	//refine: validate the job type + target target resolution 
-	//before creating/persisting the job 
+	//refine: validate the job type + target target resolution
+	//before creating/persisting the job
 
-
-	if err := validateCreateJobRequest(req); err != nil{
-		return nil, err 
+	if err := validateCreateJobRequest(req); err != nil {
+		return nil, err
 	}
 	job := &Job{
-		MediaID:      req.MediaID,
-		Type:         req.Type,
+		MediaID: req.MediaID,
+		Type:    req.Type,
 		//new : targetHeight
 		TargetHeight: req.TargetHeight,
 
@@ -62,11 +64,10 @@ func (s *service) CreateJob(
 		return nil, err
 	}
 
-	//enqueue the peristed job for the background worker 
-	if err := s.queue.Enqueue(ctx, job.ID); err != nil{
+	//enqueue the peristed job for the background worker
+	if err := s.queue.Enqueue(ctx, job.ID); err != nil {
 		return nil, err
 	}
-
 
 	return toResponse(job), nil
 }
@@ -84,9 +85,7 @@ func (s *service) GetJob(
 	return toResponse(job), nil
 }
 
-
-
-//worker needs the actual job entity rather than the api facing job repsonse
+// worker needs the actual job entity rather than the api facing job repsonse
 func (s *service) GetJobEntity(
 	ctx context.Context,
 	id uuid.UUID,
@@ -197,6 +196,19 @@ func (s *service) DeleteJob(
 	return s.repository.Delete(ctx, id)
 }
 
+
+
+func (s *service) RetryJob(ctx context.Context, id uuid.UUID, ) error {
+	job, err := s.repository.GetByID(ctx, id);
+	if err != nil{
+		return err
+	}
+	job.Status = StatusQueued
+	job.Error = ""
+	job.CompletedAt = nil
+	job.Progress = 0 
+	return s.repository.Update(ctx, job)
+}
 func toResponse(job *Job) *JobResponse {
 	return &JobResponse{
 		ID:           job.ID,
@@ -219,34 +231,31 @@ func toResponse(job *Job) *JobResponse {
 // FailJob() → marks failed, stores an error message, sets CompletedAt.
 // DeleteJob() → removes the job record
 
-
-
-//new: validation function: 
+// new: validation function:
 func validateCreateJobRequest(req CreateJobRequest) error {
-	switch req.Type{
+	switch req.Type {
 	case TypeTranscode:
-		if req.TargetHeight == nil{
+		if req.TargetHeight == nil {
 			return errors.New(
-				"target_height is required for transcode jobs", 
+				"target_height is required for transcode jobs",
 			)
 		}
-		switch *req.TargetHeight{
+		switch *req.TargetHeight {
 		case 360, 720, 1080:
 			return nil
 		default:
 			return errors.New("unsupported target height; supported values are 360, 720 and 1080")
-		 
-			
+
 		}
 	case TypeThumbnail, TypePreview:
-		if req.TargetHeight != nil{
+		if req.TargetHeight != nil {
 			return errors.New(
 				"target_height is only valid for transcode jobs",
 			)
-		} 
+		}
 
 		return nil
-		default:
-			return errors.New("unsupported job type")
+	default:
+		return errors.New("unsupported job type")
 	}
 }

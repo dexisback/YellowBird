@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/dexisback/YellowBird/internal/auth"
+	"github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/dexisback/YellowBird/internal/domain/rendition"
 	"github.com/dexisback/YellowBird/internal/domain/user"
@@ -27,6 +28,7 @@ func (s *Server) registerRoutes() {
 		s.config.RedisAddr,
 		s.config.RedisPassword,
 		s.config.RedisDB,
+		"api",
 	)
 
 	if err := redisQueue.Ping(context.Background()); err != nil {
@@ -51,6 +53,16 @@ func (s *Server) registerRoutes() {
 	renditionService := rendition.NewService(renditionRepository)
 	renditionHandler := rendition.NewHandler(renditionService)
 	rendition.RegisterRoutes(api, renditionHandler, jwtService)
+
+	//job repository + service kundli.
+	//JobService now recieves the redis queue so that:
+	//createJOb() -> Postgres -> redis stream -> worker
+
+	jobRepository := job.NewRepository(s.db)
+	jobService := job.NewService(jobRepository, redisQueue)
+	jobHandler := job.NewHandler(jobService)
+	job.RegisterRoutes(api, jobHandler, jwtService)
+
 }
 
 func healthHandler(c *gin.Context) {

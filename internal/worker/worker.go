@@ -15,15 +15,12 @@ import (
 	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/google/uuid"
 )
-//new, job retry logic
+
+// new, job retry logic
 const (
-	maxJobRetries    = 3
+	// maxJobRetries    = 3
 	recoveryInterval = (30 * time.Second)
 )
-
-
-
-
 
 type Worker struct {
 	queue      *queue.RedisQueue
@@ -46,13 +43,13 @@ func NewWorker(
 func (w *Worker) Run(ctx context.Context) error {
 	log.Println("worker started brrr")
 	//first we gotta make sure if the redis consumer group even exists before init:
-	if err := w.queue.EnsureGroup(ctx); err != nil{
+	if err := w.queue.EnsureGroup(ctx); err != nil {
 		return err
 	}
 
 	//new: periodically recover messages abandoned by previously crashed workers
 	recoveryTicker := time.NewTicker(recoveryInterval)
-	defer  recoveryTicker.Stop()
+	defer recoveryTicker.Stop()
 
 	for {
 		select {
@@ -104,7 +101,7 @@ func (w *Worker) processJob(
 	processor, err := w.registry.Get(currentJob.Type)
 	if err != nil {
 		_ = w.jobService.FailJob(ctx, jobID, err.Error())
-		return w.queue.MoveToDLQ(ctx, messageID, jobID, err.Error())
+		return w.queue.MoveToDLQ(ctx, messageID, jobID, err.Error(), 0)
 	}
 
 	if err := w.jobService.StartJob(ctx, jobID); err != nil {
@@ -127,21 +124,22 @@ func (w *Worker) processJob(
 	return nil
 }
 
-//new: mark the job failed in postgres, then move it to the dlq
+// processor failures leave the Redis message pending so the recovery loop
+// can reclaim and retry it.
 func (w *Worker) handleJobFailure(
 	ctx context.Context,
 	messageID string,
 	jobID uuid.UUID,
 	processErr error,
 ) error {
-	if err := w.jobService.FailJob(ctx, jobID, processErr.Error()); err != nil {
-		log.Printf("failed to mark job %s as failed: %v", jobID, err)
-	}
+	log.Printf("job %s failed: %v; leaving message %s pending for retry", jobID, processErr, messageID)
 
-	return w.queue.MoveToDLQ(ctx, messageID, jobID, processErr.Error())
+	return nil
 }
 
-//new: reclaim messages abandoned by crashed workers
+// recover pending messages abandoned by crashed workers and either retry them
+// or dead-letter them once their retry count is exhausted.
+
 func (w *Worker) recoverPending(ctx context.Context) error {
 	pending, err := w.queue.Pending(ctx)
 	if err != nil {
@@ -153,16 +151,40 @@ func (w *Worker) recoverPending(ctx context.Context) error {
 			continue
 		}
 
+		if w.queue.ShouldDeadLetter(message.RetryCount) {
+			jobID, err := w.queue.Claim(ctx, message.ID)
+			if err != nil {
+				log.Printf("failed to claim message %s for DLQ: %v", message.ID, err)
+				continue
+			}
+
+			errMsg := "maximum retry limits reached"
+			if err := w.jobService.FailJob(ctx, jobID, errMsg); err != nil {
+				log.Printf("failed to mark job %s as failed: %v", jobID, err)
+				continue
+			}
+
+			if err := w.queue.MoveToDLQ(ctx, message.ID, jobID, errMsg, message.RetryCount); err != nil {
+				log.Printf("failed to move job %s to DLQ: %v", jobID, err)
+				continue
+			}
+
+			continue
+		}
+
 		jobID, err := w.queue.Claim(ctx, message.ID)
 		if err != nil {
 			log.Printf("failed to reclaim message %s: %v", message.ID, err)
 			continue
 		}
 
-		log.Printf("reclaimed abandoned job %s", jobID)
-
+		log.Printf(
+			"retrying job %s (attempt %d)",
+			jobID,
+			message.RetryCount+1,
+		)
 		if err := w.processJob(ctx, message.ID, jobID); err != nil {
-			log.Printf("failed to process reclaimed job %s: %v", jobID, err)
+			log.Printf("retry attempt failed for job %s: %v", jobID, err)
 		}
 	}
 
