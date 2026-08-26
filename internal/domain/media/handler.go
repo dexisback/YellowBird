@@ -16,48 +16,58 @@ func NewHandler(service Service) *Handler {
 		service: service,
 	}
 }
-
+///////
 func (h *Handler) CreateMedia(c *gin.Context) {
-	var req CreateMediaRequest
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
-		return
+	projectID, err := uuid.Parse(c.PostForm("project_id"))
+	if err != nil{
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id",})
+		return 
+	}
+	fileHeader, err := c.FormFile("file")
+	if err != nil{
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return 
 	}
 
 	ownerIDValue, exists := c.Get("userID")
-	if !exists {
+	if !exists{
 		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "missing authenticated user",
+			"error": "missing unauthenticated user",
 		})
-		return
+		return 
 	}
-
 	ownerID, ok := ownerIDValue.(uuid.UUID)
-	if !ok {
+	if !ok{
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid authenticated user",
 		})
-		return
+		return 
 	}
 
-	media, err := h.service.CreateMedia(
-		c.Request.Context(),
-		ownerID,
-		req,
-	)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
-		return
+	media, err := h.service.CreateMedia(c.Request.Context(), ownerID, projectID, fileHeader)
+	if err != nil{
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return 
 	}
-
 	c.JSON(http.StatusCreated, media)
-}
 
+}
+//above CreateMedia changes :
+// This changes the request from:
+// JSON
+// {
+//   "project_id": "..."
+// }
+
+// to:
+// multipart/form-data
+// project_id = ...
+// file       = movie.mp4
+
+
+
+
+///////
 func (h *Handler) GetMedia(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {

@@ -81,7 +81,7 @@ func (q *RedisQueue) Dequeue(ctx context.Context) (string, uuid.UUID, error) {
 		Consumer: q.consumer,
 		Streams:  []string{streamKey, ">"},
 		Count:    1,
-		Block:    0,
+		Block:    5 * time.Second,
 	}).Result()
 
 	if err != nil {

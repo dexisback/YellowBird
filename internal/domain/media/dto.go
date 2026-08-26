@@ -7,7 +7,7 @@ import (
 )
 
 type CreateMediaRequest struct {
-	ProjectID uuid.UUID `json:"project_id" binding:"required,uuid"`
+	ProjectID uuid.UUID `form:"project_id" binding:"required"`
 }
 
 type UpdateMediaRequest struct {

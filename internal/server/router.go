@@ -8,10 +8,12 @@ import (
 
 	"github.com/dexisback/YellowBird/internal/auth"
 	"github.com/dexisback/YellowBird/internal/domain/job"
+	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/dexisback/YellowBird/internal/domain/rendition"
 	"github.com/dexisback/YellowBird/internal/domain/user"
 	"github.com/dexisback/YellowBird/internal/queue"
+	"github.com/dexisback/YellowBird/internal/storage"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,6 +65,17 @@ func (s *Server) registerRoutes() {
 	jobHandler := job.NewHandler(jobService)
 	job.RegisterRoutes(api, jobHandler, jwtService)
 
+	mediaRepository := media.NewRepository(s.db)
+	cloudinaryStorage, err := storage.NewCloudinaryStorage(s.config.CLOUDINARY_CLOUD_NAME, s.config.CLOUDINARY_API_KEY, s.config.CLOUDINARY_API_SECRET)
+	if err != nil {
+		panic(err)
+	}
+
+	
+	//media kundli:
+	mediaService := media.NewService(mediaRepository,projectRepository,cloudinaryStorage,)
+	mediaHandler := media.NewHandler(mediaService)
+	media.RegisterRoutes(api,mediaHandler,jwtService,)
 }
 
 func healthHandler(c *gin.Context) {

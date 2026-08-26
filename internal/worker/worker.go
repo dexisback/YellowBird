@@ -133,9 +133,13 @@ func (w *Worker) handleJobFailure(
 	processErr error,
 ) error {
 	log.Printf("job %s failed: %v; leaving message %s pending for retry", jobID, processErr, messageID)
-
+	if err := w.jobService.RetryJob(ctx, jobID); err != nil{   //new : handleJobFailure needs to reset back the DB to queued, and we alr had Retryjob() as a function , so implementing/using it here
+		return err
+	}
 	return nil
 }
+
+
 
 // recover pending messages abandoned by crashed workers and either retry them
 // or dead-letter them once their retry count is exhausted.
@@ -183,6 +187,15 @@ func (w *Worker) recoverPending(ctx context.Context) error {
 			jobID,
 			message.RetryCount+1,
 		)
+		if err := w.jobService.RetryJob(ctx, jobID); err != nil {
+    log.Printf(
+        "failed to reset job %s for retry: %v",
+        jobID,
+        err,
+    )
+    continue
+}
+
 		if err := w.processJob(ctx, message.ID, jobID); err != nil {
 			log.Printf("retry attempt failed for job %s: %v", jobID, err)
 		}

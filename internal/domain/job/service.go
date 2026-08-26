@@ -207,6 +207,8 @@ func (s *service) RetryJob(ctx context.Context, id uuid.UUID, ) error {
 	job.Error = ""
 	job.CompletedAt = nil
 	job.Progress = 0 
+	job.StartedAt = nil   //new: retryJob must also reset startedAt
+	
 	return s.repository.Update(ctx, job)
 }
 func toResponse(job *Job) *JobResponse {

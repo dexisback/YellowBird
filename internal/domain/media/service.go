@@ -3,17 +3,28 @@ package media
 import (
 	"context"
 	"errors"
+	"fmt"
+	"mime/multipart"
+
 
 	"github.com/dexisback/YellowBird/internal/domain/project"
+		"github.com/dexisback/YellowBird/internal/storage"   //the media service now needs the service provider (phase 1)
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 type Service interface {
+
+
+	//Yes. CreateMediaRequest needs to change, because we're 
+	//no longer creating media from a JSON body containing only project_id; the file is coming through multipart/form-data.
 	CreateMedia(
 		ctx context.Context,
 		ownerID uuid.UUID,
-		req CreateMediaRequest,
+		// req CreateMediaRequest,
+		projectID uuid.UUID,
+		fileHeader   *multipart.FileHeader,
 
 	) (*MediaResponse, error)
 
@@ -43,29 +54,34 @@ type Service interface {
 type service struct {
 	repository        Repository
 	projectRepository project.Repository
+	storage   storage.Storage   //needa update
 }
 
 func NewService(
 	repository Repository,
 	projectRepository project.Repository,
+	storage   storage.Storage,
 ) Service {
 	return &service{
 		repository:        repository,
 		projectRepository: projectRepository,
+		storage: storage,
 	}
 }
 
 func (s *service) CreateMedia(
 	ctx context.Context,
 	ownerID uuid.UUID,
-	req CreateMediaRequest,
+	// req CreateMediaRequest,
+	projectID uuid.UUID,
+	fileHeader *multipart.FileHeader,
 ) (*MediaResponse, error) {
 	//verify the project exists and belongs to the authenticated user
 
 	_, err := s.projectRepository.GetByID(
 		ctx,
 		ownerID,
-		req.ProjectID,
+		projectID,
 	)
 
 	if err != nil {
@@ -74,18 +90,50 @@ func (s *service) CreateMedia(
 		}
 		return nil, err
 	}
+	//open the uploaded multipart file:
+	file, err := fileHeader.Open()
+	if err != nil{
+		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
+	}
+	defer file.Close()
 
+	uploadResult, err := s.storage.Upload(
+		ctx, 
+		storage.UploadInput{
+			Reader: file, 
+			FileName: fileHeader.Filename,
+			MimeType: fileHeader.Header.Get("Content-Type"),
+			Size: fileHeader.Size,
+		},
+	)
+	if err != nil{
+		return nil, fmt.Errorf("failed to upload media: %w", err)
+	}
+
+
+	//persist the uploaded media metadata
 	media := &Media{
-		ProjectId: req.ProjectID,
-		Status:    StatusPending,
+		ProjectId: projectID,
+		// Status:    StatusPending,
+		OriginalFileName: uploadResult.OriginalFileName,
+		StorageKey: uploadResult.StorageKey,
+		MimeType: uploadResult.MimeType,
+		Size: uploadResult.Size,
+		Status: StatusUploaded,
 	}
 
 	if err := s.repository.Create(ctx, media); err != nil {
-		return nil, err
+		// Database failed after storage succeeded.
+		// Clean up the orphaned storage object.
+		_ = s.storage.Delete(ctx, uploadResult.StorageKey)
+		return nil, fmt.Errorf("failed to create media record: %w", err)
 	}
 
 	return toResponse(media), nil
 }
+
+
+
 
 func (s *service) GetMedia(
 	ctx context.Context,
@@ -159,9 +207,3 @@ func toResponse(media *Media) *MediaResponse {
 		UpdatedAt:        media.UpdatedAt,
 	}
 }
-
-//one thing you'll notice is that CreateMedia() currently only creates the db record
-//
-// //we are intentionally not handling the file uploads yet
-// //the upload pipeline will be built separately
-//
