@@ -71,9 +71,9 @@ func (s *Server) registerRoutes() {
 		panic(err)
 	}
 
-	
+
 	//media kundli:
-	mediaService := media.NewService(mediaRepository,projectRepository,cloudinaryStorage,)
+	mediaService := media.NewService(mediaRepository,projectRepository,cloudinaryStorage,jobService)
 	mediaHandler := media.NewHandler(mediaService)
 	media.RegisterRoutes(api,mediaHandler,jwtService,)
 }
