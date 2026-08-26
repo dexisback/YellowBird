@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/dexisback/YellowBird/internal/config"
@@ -30,10 +31,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := server.New(cfg, db)
-	server.Run()
+	srv := server.New(cfg, db)
+	log.Println("config loaded successfully ✅")
+	log.Println("up and running on ", cfg.Port)
 
-	//else:
-	log.Println("config loaded succesfullyuh ✅")
-	log.Println("up and runnin, on ", cfg.Port)
+	log.Fatal(srv.Run(context.Background()))
 }

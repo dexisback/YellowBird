@@ -3,7 +3,6 @@ package server
 //we still import net/http, because we dont wanna write statusCodes as literal numbers but rather use the functionality of writing http.something soemthing
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/dexisback/YellowBird/internal/auth"
@@ -12,7 +11,6 @@ import (
 	"github.com/dexisback/YellowBird/internal/domain/project"
 	"github.com/dexisback/YellowBird/internal/domain/rendition"
 	"github.com/dexisback/YellowBird/internal/domain/user"
-	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/dexisback/YellowBird/internal/storage"
 	"github.com/gin-gonic/gin"
 )
@@ -24,18 +22,6 @@ func (s *Server) registerRoutes() {
 
 	//jwt:
 	jwtService := auth.NewJWTService(s.config.JWT_SECRET)
-
-	//creating the redis queue, right after creating the jwt service
-	redisQueue := queue.NewRedisQueue(
-		s.config.RedisAddr,
-		s.config.RedisPassword,
-		s.config.RedisDB,
-		"api",
-	)
-
-	if err := redisQueue.Ping(context.Background()); err != nil {
-		panic(err)
-	}
 
 	//project kundli:
 	projectRepository := project.NewRepository(s.db)
@@ -61,7 +47,7 @@ func (s *Server) registerRoutes() {
 	//createJOb() -> Postgres -> redis stream -> worker
 
 	jobRepository := job.NewRepository(s.db)
-	jobService := job.NewService(jobRepository, redisQueue)
+	jobService := job.NewService(jobRepository, s.redis)
 	jobHandler := job.NewHandler(jobService)
 	job.RegisterRoutes(api, jobHandler, jwtService)
 
@@ -71,11 +57,10 @@ func (s *Server) registerRoutes() {
 		panic(err)
 	}
 
-
 	//media kundli:
-	mediaService := media.NewService(mediaRepository,projectRepository,cloudinaryStorage,jobService)
+	mediaService := media.NewService(mediaRepository, projectRepository, cloudinaryStorage, jobService)
 	mediaHandler := media.NewHandler(mediaService)
-	media.RegisterRoutes(api,mediaHandler,jwtService,)
+	media.RegisterRoutes(api, mediaHandler, jwtService)
 }
 
 func healthHandler(c *gin.Context) {
