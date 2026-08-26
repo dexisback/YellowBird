@@ -26,3 +26,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+
+
+# Go binaries
+/bin/
+/dist/
+*.exe
+*.out
+
+# Local binaries
+api
+worker
