@@ -25,12 +25,19 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 	return db, nil
 }
 
+// func Migrate(db *gorm.DB) error {
+// 	return db.AutoMigrate(
+// 		&project.Project{},
+// 		&user.User{},
+// 		&media.Media{},
+// 		&job.Job{},
+// 		&rendition.Rendition{},
+// 	)
+// }
+
+
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(7. Dockerfiles + docker-compose
-8. GitHub Actions CI
-9. CD/deployment
-10. config/secrets/logging/health checks
-11. documentation + cleanup
+	return db.AutoMigrate(
 		&project.Project{},
 		&user.User{},
 		&media.Media{},
