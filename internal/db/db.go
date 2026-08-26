@@ -3,8 +3,10 @@ package db
 import (
 	"fmt"
 
+	"github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/domain/project"
+	"github.com/dexisback/YellowBird/internal/domain/rendition"
 	"github.com/dexisback/YellowBird/internal/domain/user"
 
 	"github.com/dexisback/YellowBird/internal/config"
@@ -16,7 +18,7 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to db &w", err)
+		return nil, fmt.Errorf("failed to connect to db: %w", err)
 	}
 
 	//else:
@@ -28,5 +30,7 @@ func Migrate(db *gorm.DB) error {
 		&project.Project{},
 		&user.User{},
 		&media.Media{},
+		&job.Job{},
+		&rendition.Rendition{},
 	)
 }
