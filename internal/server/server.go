@@ -82,6 +82,13 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("server failed while shutting down: %w", err)
 		}
 
+		if s.redis != nil {
+			_ = s.redis.Close()
+		}
+		if sqlDB, err := s.db.DB(); err == nil && sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+
 		return nil
 	}
 }

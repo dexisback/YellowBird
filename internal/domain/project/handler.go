@@ -75,27 +75,27 @@ func (h *Handler) GetProject(c *gin.Context) {
 	// c.JSON(http.StatusOK, project)
 	ownerIDValue, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized , gin.H{"error": "unauthorised ownerid"})
-		return 
-	} 
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorised ownerid"})
+		return
+	}
 
 	ownerID, ok := ownerIDValue.(uuid.UUID)
 
-	if !ok{
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauth man"})
-		return 
+		return
 	}
 
-	id , err := uuid.Parse(c.Param("id"))
-	if err != nil{
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unable to parse id"})
-		return 
+		return
 	}
 
 	project, err := h.service.GetProject(c.Request.Context(), ownerID, id)
-	if err != nil{
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return 
+		return
 	}
 	c.JSON(http.StatusOK, project)
 }
@@ -131,14 +131,14 @@ func (h *Handler) ListProjects(c *gin.Context) {
 
 func (h *Handler) UpdateProject(c *gin.Context) {
 	ownerIDValue, exists := c.Get("userID")
-	if !exists{
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user :("})
-		return 
+		return
 	}
 	ownerID, ok := ownerIDValue.(uuid.UUID)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authenticated user"})
-		return 
+		return
 
 	}
 
@@ -157,7 +157,7 @@ func (h *Handler) UpdateProject(c *gin.Context) {
 		})
 		return
 	}
-	project, err := h.service.UpdateProject(c.Request.Context(), ownerID, id, req,)
+	project, err := h.service.UpdateProject(c.Request.Context(), ownerID, id, req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -167,30 +167,26 @@ func (h *Handler) UpdateProject(c *gin.Context) {
 	c.JSON(http.StatusOK, project)
 }
 
-
-
-
 func (h *Handler) DeleteProject(c *gin.Context) {
 	ownerIDValue, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authenticated user"})
-		return 
+		return
 	}
 
 	ownerID, ok := ownerIDValue.(uuid.UUID)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authenticated user"})
-		return 
-	}
-
-
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id",})
 		return
 	}
 
-	if err := h.service.DeleteProject(c.Request.Context(), ownerID, id, ); err != nil {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id"})
+		return
+	}
+
+	if err := h.service.DeleteProject(c.Request.Context(), ownerID, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})

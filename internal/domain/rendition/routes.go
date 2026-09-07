@@ -1,4 +1,4 @@
-package rendition 
+package rendition
 
 import (
 	"github.com/dexisback/YellowBird/internal/auth"
@@ -6,25 +6,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-
-
 func RegisterRoutes(
 	router *gin.RouterGroup,
-	handler *Handler, 
+	handler *Handler,
 	jwtService *auth.JWTService,
 ) {
-	renditions:= router.Group("/renditions")
+	renditions := router.Group("/renditions")
 	renditions.Use(middleware.Auth(jwtService))
 
-
 	{
-			renditions.POST("", handler.CreateRendition)
-			renditions.GET("", handler.ListRenditionsByMedia)
-			renditions.GET("/:id", handler.GetRendition)
-			renditions.DELETE("/:id", handler.DeleteRendition)
+		renditions.POST("", handler.CreateRendition)
+		renditions.GET("", handler.ListRenditionsByMedia)
+		renditions.GET("/:id", handler.GetRendition)
+		renditions.DELETE("/:id", handler.DeleteRendition)
 
 	}
 }
-
-
-

@@ -10,7 +10,6 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler, jwtService *auth.
 	// projects := router.Group("/projects")
 	//public: no more public since projects are being accessed by a particular user
 
-
 	//protected:
 	protected := router.Group("/projects")
 	protected.Use(middleware.Auth(jwtService))

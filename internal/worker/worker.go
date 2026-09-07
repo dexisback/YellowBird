@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dexisback/YellowBird/internal/domain/job"
+	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -28,17 +29,24 @@ type Worker struct {
 	queue      *queue.RedisQueue
 	jobService job.Service
 	registry   *Registry
+	mediaRepo  media.Repository
 }
 
 func NewWorker(
 	queue *queue.RedisQueue,
 	jobService job.Service,
 	registry *Registry,
+	mediaRepo ...media.Repository,
 ) *Worker {
+	var mr media.Repository
+	if len(mediaRepo) > 0 {
+		mr = mediaRepo[0]
+	}
 	return &Worker{
 		queue:      queue,
 		jobService: jobService,
 		registry:   registry,
+		mediaRepo:  mr,
 	}
 }
 
@@ -57,7 +65,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			log.Println("worker shutting down")
-			return ctx.Err()
+			return nil
 		case <-recoveryTicker.C:
 			if err := w.recoverPending(ctx); err != nil {
 				log.Printf("failed to recover pending jobs: %v", err)
@@ -69,11 +77,15 @@ func (w *Worker) Run(ctx context.Context) error {
 		messageID, jobID, err := w.queue.Dequeue(ctx)
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
+				if ctx.Err() != nil {
+					log.Println("worker shutting down")
+					return nil
+				}
 				continue
 			}
 			if ctx.Err() != nil {
 				log.Println("worker shutting down")
-				return ctx.Err()
+				return nil
 			}
 			log.Printf("failed to dequeue job: %v", err)
 			continue
@@ -106,11 +118,17 @@ func (w *Worker) processJob(
 	processor, err := w.registry.Get(currentJob.Type)
 	if err != nil {
 		_ = w.jobService.FailJob(ctx, jobID, err.Error())
+		if w.mediaRepo != nil {
+			_ = w.mediaRepo.SyncStatus(ctx, currentJob.MediaID)
+		}
 		return w.queue.MoveToDLQ(ctx, messageID, jobID, err.Error(), 0)
 	}
 
 	if err := w.jobService.StartJob(ctx, jobID); err != nil {
 		return err
+	}
+	if w.mediaRepo != nil {
+		_ = w.mediaRepo.SyncStatus(ctx, currentJob.MediaID)
 	}
 
 	if err := processor.Process(ctx, currentJob); err != nil {
@@ -119,6 +137,9 @@ func (w *Worker) processJob(
 
 	if err := w.jobService.CompleteJob(ctx, jobID); err != nil {
 		return err
+	}
+	if w.mediaRepo != nil {
+		_ = w.mediaRepo.SyncStatus(ctx, currentJob.MediaID)
 	}
 
 	//new: only ack after processing + db completion succeeded
@@ -169,6 +190,11 @@ func (w *Worker) recoverPending(ctx context.Context) error {
 			if err := w.jobService.FailJob(ctx, jobID, errMsg); err != nil {
 				log.Printf("failed to mark job %s as failed: %v", jobID, err)
 				continue
+			}
+			if w.mediaRepo != nil {
+				if currentJob, err := w.jobService.GetJobEntity(ctx, jobID); err == nil && currentJob != nil {
+					_ = w.mediaRepo.SyncStatus(ctx, currentJob.MediaID)
+				}
 			}
 
 			if err := w.queue.MoveToDLQ(ctx, message.ID, jobID, errMsg, message.RetryCount); err != nil {

@@ -2,7 +2,9 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
@@ -185,4 +187,59 @@ func TestDequeueInvalidJobID(t *testing.T) {
 	_, _, err = q.Dequeue(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid job id")
+}
+
+func TestDequeueIdleTimeout(t *testing.T) {
+	q, _ := newTestQueue(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	require.NoError(t, q.EnsureGroup(ctx))
+
+	_, _, err := q.Dequeue(ctx)
+	require.Error(t, err)
+	// miniredis unblocks with redis.Nil or deadline exceeded on empty stream
+	assert.True(t, errors.Is(err, redis.Nil) || errors.Is(err, context.DeadlineExceeded))
+}
+
+func TestRetryDeliveryCounting(t *testing.T) {
+	q, mr := newTestQueue(t)
+	ctx := context.Background()
+
+	require.NoError(t, q.EnsureGroup(ctx))
+
+	jobID := uuid.New()
+	require.NoError(t, q.Enqueue(ctx, jobID))
+
+	// Delivery 1
+	messageID, _, err := q.Dequeue(ctx)
+	require.NoError(t, err)
+
+	pending, err := q.Pending(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, int64(1), pending[0].RetryCount)
+	assert.False(t, q.ShouldDeadLetter(pending[0].RetryCount))
+
+	// Simulate pending timeout & Claim -> Delivery 2
+	mr.FastForward(6 * time.Minute)
+	_, err = q.Claim(ctx, messageID)
+	require.NoError(t, err)
+
+	pending, err = q.Pending(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, int64(2), pending[0].RetryCount)
+	assert.False(t, q.ShouldDeadLetter(pending[0].RetryCount))
+
+	// Simulate pending timeout & Claim -> Delivery 3
+	mr.FastForward(6 * time.Minute)
+	_, err = q.Claim(ctx, messageID)
+	require.NoError(t, err)
+
+	pending, err = q.Pending(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, int64(3), pending[0].RetryCount)
+	assert.True(t, q.ShouldDeadLetter(pending[0].RetryCount))
 }

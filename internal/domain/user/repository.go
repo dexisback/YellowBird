@@ -84,7 +84,3 @@ func (r *repository) Delete(ctx context.Context, id uuid.UUID) error {
 		Delete(&User{}, "id = ?", id).
 		Error
 }
-
-
-
-

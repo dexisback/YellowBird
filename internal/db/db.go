@@ -35,7 +35,6 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 // 	)
 // }
 
-
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&project.Project{},

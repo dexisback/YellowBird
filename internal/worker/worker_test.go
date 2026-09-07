@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	testStream  = "yellowbird:jobs"
-	testGroup   = "yellowbird-workers"
-	testDLQ     = "yellowbird:jobs:dlq"
+	testStream = "yellowbird:jobs"
+	testGroup  = "yellowbird-workers"
+	testDLQ    = "yellowbird:jobs:dlq"
 )
 
 func newTestWorker(t *testing.T, mr *miniredis.Miniredis) (*Worker, *mocks.MockJobService) {
@@ -192,4 +192,77 @@ func TestWorkerRecoverPendingDeadLetters(t *testing.T) {
 	svc.AssertCalled(t, "FailJob", mock.Anything, jobID, mock.Anything)
 	assert.Equal(t, int64(1), streamLen(t, mr, testDLQ), "exhausted job should be dead-lettered")
 	assert.Equal(t, int64(0), pendingCount(t, mr))
+}
+
+func TestWorkerProcessJobSyncsMediaStatus(t *testing.T) {
+	mr := miniredis.RunT(t)
+	q := queue.NewRedisQueue(mr.Addr(), "", 0, "test-consumer")
+	svc := new(mocks.MockJobService)
+	mediaRepo := new(mocks.MockMediaRepository)
+	reg := NewRegistry()
+	reg.Register(&stubProcessor{typ: job.TypeThumbnail})
+
+	w := NewWorker(q, svc, reg, mediaRepo)
+
+	jobID := uuid.New()
+	mediaID := uuid.New()
+	svc.On("GetJobEntity", mock.Anything, jobID).
+		Return(&job.Job{ID: jobID, MediaID: mediaID, Type: job.TypeThumbnail, Status: job.StatusQueued}, nil)
+	svc.On("StartJob", mock.Anything, jobID).Return(nil)
+	svc.On("CompleteJob", mock.Anything, jobID).Return(nil)
+	mediaRepo.On("SyncStatus", mock.Anything, mediaID).Return(nil)
+
+	messageID := seedPending(t, mr, w, jobID)
+
+	require.NoError(t, w.processJob(context.Background(), messageID, jobID))
+
+	svc.AssertCalled(t, "StartJob", mock.Anything, jobID)
+	svc.AssertCalled(t, "CompleteJob", mock.Anything, jobID)
+	mediaRepo.AssertNumberOfCalls(t, "SyncStatus", 2)
+}
+
+func TestWorkerProcessJobUnknownProcessorSyncsMediaStatus(t *testing.T) {
+	mr := miniredis.RunT(t)
+	q := queue.NewRedisQueue(mr.Addr(), "", 0, "test-consumer")
+	svc := new(mocks.MockJobService)
+	mediaRepo := new(mocks.MockMediaRepository)
+	reg := NewRegistry()
+
+	w := NewWorker(q, svc, reg, mediaRepo)
+
+	jobID := uuid.New()
+	mediaID := uuid.New()
+	svc.On("GetJobEntity", mock.Anything, jobID).
+		Return(&job.Job{ID: jobID, MediaID: mediaID, Type: job.TypeTranscode, Status: job.StatusQueued}, nil)
+	svc.On("FailJob", mock.Anything, jobID, mock.Anything).Return(nil)
+	mediaRepo.On("SyncStatus", mock.Anything, mediaID).Return(nil)
+
+	messageID := seedPending(t, mr, w, jobID)
+
+	require.NoError(t, w.processJob(context.Background(), messageID, jobID))
+
+	svc.AssertCalled(t, "FailJob", mock.Anything, jobID, mock.Anything)
+	mediaRepo.AssertCalled(t, "SyncStatus", mock.Anything, mediaID)
+}
+
+func TestWorkerRunGracefulShutdown(t *testing.T) {
+	mr := miniredis.RunT(t)
+	w, _ := newTestWorker(t, mr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- w.Run(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(6 * time.Second):
+		t.Fatal("worker did not shut down cleanly")
+	}
 }

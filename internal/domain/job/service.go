@@ -20,9 +20,9 @@ type Service interface {
 	FailJob(ctx context.Context, id uuid.UUID, errMsg string) error
 	DeleteJob(ctx context.Context, id uuid.UUID) error
 	RetryJob(
-	ctx context.Context,
-	id uuid.UUID,
-) error
+		ctx context.Context,
+		id uuid.UUID,
+	) error
 }
 
 //repository = db access, but you dont want everyone having that accewss. so we just create a repository struct each time
@@ -196,19 +196,17 @@ func (s *service) DeleteJob(
 	return s.repository.Delete(ctx, id)
 }
 
-
-
-func (s *service) RetryJob(ctx context.Context, id uuid.UUID, ) error {
-	job, err := s.repository.GetByID(ctx, id);
-	if err != nil{
+func (s *service) RetryJob(ctx context.Context, id uuid.UUID) error {
+	job, err := s.repository.GetByID(ctx, id)
+	if err != nil {
 		return err
 	}
 	job.Status = StatusQueued
 	job.Error = ""
 	job.CompletedAt = nil
-	job.Progress = 0 
-	job.StartedAt = nil   //new: retryJob must also reset startedAt
-	
+	job.Progress = 0
+	job.StartedAt = nil //new: retryJob must also reset startedAt
+
 	return s.repository.Update(ctx, job)
 }
 func toResponse(job *Job) *JobResponse {

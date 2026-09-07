@@ -19,19 +19,16 @@ type CreateRendtionRequest struct {
 }
 
 type RenditionResponse struct {
-	ID uuid.UUID `json:"id"`
-	MediaID uuid.UUID `json:"media_id"`
-	Type RenditionType `json:"type"`
-	StorageKey string `json:"storage_key"`
-	URL string `json:"url"`
-	MimeType string `json:"mime_type"`
-	Size int64 `json:"size"`
-	Width *int `json:"width,omitempty"`
-	Height *int `json:"height,omitempty"`
-	DurationSeconds *float64 `json:"duration_seconds,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              uuid.UUID     `json:"id"`
+	MediaID         uuid.UUID     `json:"media_id"`
+	Type            RenditionType `json:"type"`
+	StorageKey      string        `json:"storage_key"`
+	URL             string        `json:"url"`
+	MimeType        string        `json:"mime_type"`
+	Size            int64         `json:"size"`
+	Width           *int          `json:"width,omitempty"`
+	Height          *int          `json:"height,omitempty"`
+	DurationSeconds *float64      `json:"duration_seconds,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at"`
 }
-
-
-

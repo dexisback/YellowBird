@@ -1,65 +1,61 @@
 package rendition
+
 import (
-	"net/http"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"net/http"
 )
 
-
 type Handler struct {
-	service Service 
-
+	service Service
 }
 
 func NewHandler(service Service) *Handler {
-	return &Handler {
+	return &Handler{
 		service: service,
 	}
 }
 
-func (h *Handler) CreateRendition(c *gin.Context){
+func (h *Handler) CreateRendition(c *gin.Context) {
 	var req CreateRendtionRequest
 
-	if err := c.ShouldBindJSON(&req); err != nil{
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
 		})
-		return 
+		return
 	}
-	rendition, err := h.service.CreateRendition(c.Request.Context(), req,)
-	if err != nil{
+	rendition, err := h.service.CreateRendition(c.Request.Context(), req)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
-		return 
+		return
 	}
 	c.JSON(http.StatusCreated, rendition)
 }
 
-func (h *Handler) GetRendition(c *gin.Context){
+func (h *Handler) GetRendition(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
-	if err != nil{
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":"invalid rendition id",
+			"error": "invalid rendition id",
 		})
-		return 
+		return
 	}
 
 	rendition, err := h.service.GetRendition(
 		c.Request.Context(), id,
 	)
 
-	if err != nil{
-		c.JSON(http.StatusNotFound,gin.H{
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
 			"error": err.Error(),
 		})
-		return 
+		return
 	}
 	c.JSON(http.StatusOK, rendition)
 }
-
-
-
 
 func (h *Handler) ListRenditionsByMedia(c *gin.Context) {
 	mediaID, err := uuid.Parse(c.Query("media_id"))

@@ -6,8 +6,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
-//repository interface tells and says what can be done
-//the struct says "what data i have and how do i do it"
+
+// repository interface tells and says what can be done
+// the struct says "what data i have and how do i do it"
 type Repository interface {
 	Create(ctx context.Context, job *Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*Job, error)

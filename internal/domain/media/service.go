@@ -2,10 +2,10 @@ package media
 
 import (
 	"context"
-	"strings"
 	"errors"
 	"fmt"
 	"mime/multipart"
+	"strings"
 
 	"github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/dexisback/YellowBird/internal/domain/project"
@@ -47,6 +47,11 @@ type Service interface {
 	DeleteMedia(
 		ctx context.Context,
 		id uuid.UUID,
+	) error
+
+	SyncStatus(
+		ctx context.Context,
+		mediaID uuid.UUID,
 	) error
 }
 
@@ -132,52 +137,49 @@ func (s *service) CreateMedia(
 
 	//after creating the media row, we create the job:
 	//create the processingJ*bs , each CreateJ*b() call persists the job and enqueues it into the redis stream
-   // ---------------------------------------------------------
-    // PROCESSING JOB FAN-OUT
-    //
-    // Each CreateJob():
-    //   1. creates a Job row in PostgreSQL
-    //   2. XADDs the job ID into the Redis Stream
-    //   3. a worker eventually consumes it
-    // ---------------------------------------------------------
+	// ---------------------------------------------------------
+	// PROCESSING JOB FAN-OUT
+	//
+	// Each CreateJob():
+	//   1. creates a Job row in PostgreSQL
+	//   2. XADDs the job ID into the Redis Stream
+	//   3. a worker eventually consumes it
+	// ---------------------------------------------------------
 	processingJobs := []job.CreateJobRequest{
 		{
 			MediaID: media.ID,
-			Type: job.TypeThumbnail,
+			Type:    job.TypeThumbnail,
 		},
 		{
 			MediaID: media.ID,
-			Type: job.TypePreview,
+			Type:    job.TypePreview,
 		},
-
 	}
 
 	//videos additionally get 360/720/1080 transcoding jobs
-	if strings.HasPrefix(media.MimeType, "video/"){
-		for _, height := range []int{360,720,1080}{
+	if strings.HasPrefix(media.MimeType, "video/") {
+		for _, height := range []int{360, 720, 1080} {
 			targetHeight := height
 			processingJobs = append(
-				processingJobs, 
+				processingJobs,
 				job.CreateJobRequest{
-					MediaID: media.ID,
-					Type: job.TypeTranscode,
+					MediaID:      media.ID,
+					Type:         job.TypeTranscode,
 					TargetHeight: &targetHeight,
 				},
 			)
 		}
-		
+
 	}
 	//persists + enqueue every processing job:
-	for _, jobRequest := range processingJobs{
-		if _, err := s.jobService.CreateJob(ctx, jobRequest); err != nil{
+	for _, jobRequest := range processingJobs {
+		if _, err := s.jobService.CreateJob(ctx, jobRequest); err != nil {
 			media.Status = StatusFailed
 			_ = s.repository.Update(ctx, media)
-			return nil , fmt.Errorf("failed to create processing job: %w", err)
+			return nil, fmt.Errorf("failed to create processing job: %w", err)
 
 		}
 	}
-
-
 
 	// for _, req := range jobs{
 	// 	if _, err := s.jobService.CreateJob(ctx, req); err != nil{
@@ -246,6 +248,13 @@ func (s *service) DeleteMedia(
 	id uuid.UUID,
 ) error {
 	return s.repository.Delete(ctx, id)
+}
+
+func (s *service) SyncStatus(
+	ctx context.Context,
+	mediaID uuid.UUID,
+) error {
+	return s.repository.SyncStatus(ctx, mediaID)
 }
 
 func toResponse(media *Media) *MediaResponse {

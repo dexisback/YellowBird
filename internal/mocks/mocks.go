@@ -161,6 +161,10 @@ func (m *MockMediaRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return m.Called(ctx, id).Error(0)
 }
 
+func (m *MockMediaRepository) SyncStatus(ctx context.Context, mediaID uuid.UUID) error {
+	return m.Called(ctx, mediaID).Error(0)
+}
+
 // ---------------------------------------------------------------------------
 // project.Repository
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/testutil"
 	"github.com/google/uuid"
@@ -93,4 +94,77 @@ func TestMediaRepositoryListByProjectEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, list)
 	assert.Empty(t, list)
+}
+
+func TestMediaRepositorySyncStatus(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.NewPostgres(t)
+	mediaRepo := media.NewRepository(db)
+	jobRepo := job.NewRepository(db)
+
+	projectID := uuid.New()
+	m := &media.Media{
+		ProjectId:        projectID,
+		OriginalFileName: "video.mp4",
+		StorageKey:       "yellowbird/video.mp4",
+		MimeType:         "video/mp4",
+		Size:             2048,
+		Status:           media.StatusUploaded,
+	}
+	require.NoError(t, mediaRepo.Create(ctx, m))
+
+	j1 := &job.Job{
+		MediaID: m.ID,
+		Type:    job.TypeThumbnail,
+		Status:  job.StatusQueued,
+	}
+	require.NoError(t, jobRepo.Create(ctx, j1))
+
+	j2 := &job.Job{
+		MediaID: m.ID,
+		Type:    job.TypePreview,
+		Status:  job.StatusQueued,
+	}
+	require.NoError(t, jobRepo.Create(ctx, j2))
+
+	require.NoError(t, mediaRepo.SyncStatus(ctx, m.ID))
+	got, err := mediaRepo.GetByID(ctx, m.ID)
+	require.NoError(t, err)
+	assert.Equal(t, media.StatusProcessing, got.Status)
+
+	j1.Status = job.StatusCompleted
+	require.NoError(t, jobRepo.Update(ctx, j1))
+	require.NoError(t, mediaRepo.SyncStatus(ctx, m.ID))
+	got, err = mediaRepo.GetByID(ctx, m.ID)
+	require.NoError(t, err)
+	assert.Equal(t, media.StatusProcessing, got.Status)
+
+	j2.Status = job.StatusCompleted
+	require.NoError(t, jobRepo.Update(ctx, j2))
+	require.NoError(t, mediaRepo.SyncStatus(ctx, m.ID))
+	got, err = mediaRepo.GetByID(ctx, m.ID)
+	require.NoError(t, err)
+	assert.Equal(t, media.StatusReady, got.Status)
+
+	m2 := &media.Media{
+		ProjectId:        projectID,
+		OriginalFileName: "video2.mp4",
+		StorageKey:       "yellowbird/video2.mp4",
+		MimeType:         "video/mp4",
+		Size:             2048,
+		Status:           media.StatusUploaded,
+	}
+	require.NoError(t, mediaRepo.Create(ctx, m2))
+
+	j3 := &job.Job{
+		MediaID: m2.ID,
+		Type:    job.TypeThumbnail,
+		Status:  job.StatusFailed,
+	}
+	require.NoError(t, jobRepo.Create(ctx, j3))
+
+	require.NoError(t, mediaRepo.SyncStatus(ctx, m2.ID))
+	got2, err := mediaRepo.GetByID(ctx, m2.ID)
+	require.NoError(t, err)
+	assert.Equal(t, media.StatusFailed, got2.Status)
 }

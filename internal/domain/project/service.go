@@ -30,8 +30,8 @@ func (s *service) CreateProject(
 	req CreateProjectRequest,
 ) (*ProjectResponse, error) {
 	project := &Project{
-		OwnerID:    ownerID,
-		Name:       req.Name,
+		OwnerID:     ownerID,
+		Name:        req.Name,
 		Description: req.Description,
 	}
 

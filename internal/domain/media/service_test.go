@@ -242,3 +242,13 @@ func TestCreateMediaJobCreationFailureMarksMediaFailed(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncStatus(t *testing.T) {
+	f := newFixture(t)
+	mediaID := uuid.New()
+	f.mediaRepo.On("SyncStatus", mock.Anything, mediaID).Return(nil)
+
+	err := f.service.SyncStatus(context.Background(), mediaID)
+	require.NoError(t, err)
+	f.mediaRepo.AssertCalled(t, "SyncStatus", mock.Anything, mediaID)
+}

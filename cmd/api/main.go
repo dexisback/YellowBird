@@ -1,10 +1,12 @@
-//builds go run ./cmd/api
-
 package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/dexisback/YellowBird/internal/config"
 	dbpkg "github.com/dexisback/YellowBird/internal/db"
@@ -13,7 +15,6 @@ import (
 
 func main() {
 	cfg, err := config.Load()
-
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -23,10 +24,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// if err := db.AutoMigrate(db) ; err != nil{
-	// 	log.Fatal(err)
-	// }
-
 	if err := dbpkg.Migrate(db); err != nil {
 		log.Fatal(err)
 	}
@@ -35,5 +32,10 @@ func main() {
 	log.Println("config loaded successfully ✅")
 	log.Println("up and running on ", cfg.Port)
 
-	log.Fatal(srv.Run(context.Background()))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/dexisback/YellowBird/internal/domain/job"
+	"github.com/dexisback/YellowBird/internal/domain/media"
 	"github.com/dexisback/YellowBird/internal/queue"
 	"github.com/dexisback/YellowBird/internal/testutil"
 	"github.com/dexisback/YellowBird/internal/worker"
@@ -62,5 +63,63 @@ func TestWorkerRunEndToEnd(t *testing.T) {
 	assert.Equal(t, job.StatusCompleted, status, "worker should complete the job")
 
 	// The message must have been acked from the stream.
+	assert.Equal(t, int64(0), pendingCount(t, mr))
+}
+
+func TestWorkerRunMediaLifecycleEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	db := testutil.NewPostgres(t)
+	mr := miniredis.RunT(t)
+
+	mediaRepo := media.NewRepository(db)
+	jobRepo := job.NewRepository(db)
+	redisQueue := queue.NewRedisQueue(mr.Addr(), "", 0, "integration-worker")
+	jobService := job.NewService(jobRepo, redisQueue)
+
+	registry := worker.NewRegistry()
+	registry.Register(&stubProcessor{typ: job.TypeThumbnail})
+	registry.Register(&stubProcessor{typ: job.TypePreview})
+
+	projectID := uuid.New()
+	m := &media.Media{
+		ProjectId:        projectID,
+		OriginalFileName: "sample.mp4",
+		StorageKey:       "yellowbird/sample.mp4",
+		MimeType:         "video/mp4",
+		Size:             4096,
+		Status:           media.StatusUploaded,
+	}
+	require.NoError(t, mediaRepo.Create(ctx, m))
+
+	_, err := jobService.CreateJob(ctx, job.CreateJobRequest{
+		MediaID: m.ID,
+		Type:    job.TypeThumbnail,
+	})
+	require.NoError(t, err)
+
+	_, err = jobService.CreateJob(ctx, job.CreateJobRequest{
+		MediaID: m.ID,
+		Type:    job.TypePreview,
+	})
+	require.NoError(t, err)
+
+	w := worker.NewWorker(redisQueue, jobService, registry, mediaRepo)
+	go func() { _ = w.Run(ctx) }()
+
+	deadline := time.Now().Add(15 * time.Second)
+	var finalStatus media.MediaStatus
+	for time.Now().Before(deadline) {
+		entity, err := mediaRepo.GetByID(ctx, m.ID)
+		require.NoError(t, err)
+		finalStatus = entity.Status
+		if finalStatus == media.StatusReady {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	assert.Equal(t, media.StatusReady, finalStatus)
 	assert.Equal(t, int64(0), pendingCount(t, mr))
 }

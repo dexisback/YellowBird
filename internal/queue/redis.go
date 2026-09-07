@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-
 	// "github.com/dexisback/YellowBird/internal/domain/job"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -133,11 +132,6 @@ func (q *RedisQueue) Ack(
 	).Err()
 }
 
-
-
-
-
-
 // NEW: inspect pending messages.
 //
 // Used to find jobs whose workers crashed before ACKing them.
@@ -205,15 +199,10 @@ func (q *RedisQueue) Claim(
 	return uuid.Parse(jobIDString)
 }
 
-
-
-//decider: whether one should move to dlq or not:
-func (q *RedisQueue) ShouldDeadLetter(deliveryCount int64,)bool {
+// decider: whether one should move to dlq or not:
+func (q *RedisQueue) ShouldDeadLetter(deliveryCount int64) bool {
 	return deliveryCount >= maxRetries
 }
-
-
-
 
 // NEW: move a permanently failing job to the dead-letter stream.
 // The original message is acknowledged only after the DLQ entry
@@ -223,7 +212,7 @@ func (q *RedisQueue) MoveToDLQ(
 	messageID string,
 	jobID uuid.UUID,
 	errMsg string,
-	deliveryCount int64,  //new addition
+	deliveryCount int64, //new addition
 ) error {
 	_, err := q.client.XAdd(
 		ctx,
@@ -253,8 +242,3 @@ func (q *RedisQueue) MoveToDLQ(
 func (q *RedisQueue) Close() error {
 	return q.client.Close()
 }
-
-
-
-
-
