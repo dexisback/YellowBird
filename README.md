@@ -1,470 +1,544 @@
 # YellowBird
 
-Video upload and processing platform. Upload a video, and YellowBird generates
-thumbnails, previews, and multiple transcode renditions in the background.
+YellowBird is a production-style, asynchronous video and media processing backend written in Go. When a user uploads a video or image, YellowBird durably stores metadata, fans out processing tasks across a distributed queue, and executes background transcoding, preview clipping, and thumbnail extraction via FFmpeg.
 
-The project is structured as two independent Go processes that share PostgreSQL
-and Redis:
-
-- **API** (`cmd/api`) — HTTP server for auth, projects, media, jobs, and renditions.
-- **Worker** (`cmd/worker`) — background consumer that pulls jobs off Redis Streams
-  and runs FFmpeg to produce renditions.
+The project serves as a real-world systems-engineering playground exploring resilient backend architecture: **at-least-once job delivery**, **Redis Streams consumer groups**, **PostgreSQL transaction concurrency with row locking**, **dead-letter queuing (DLQ)**, **worker crash recovery**, and **graceful shutdown**.
 
 ---
 
-## Table of contents
+## Table of Contents
 
-- [Purpose](#purpose)
-- [Concepts explored](#concepts-explored)
-- [What it does](#what-it-does)
-- [Architecture](#architecture)
-- [The processing pipeline](#the-processing-pipeline)
-- [Retries and dead-lettering](#retries-and-dead-lettering)
-- [Repository layout](#repository-layout)
-- [Tech stack](#tech-stack)
-- [Getting started](#getting-started)
+- [Core Architectural Mental Model](#core-architectural-mental-model)
+- [System Architecture](#system-architecture)
+- [How It Works: Step-by-Step](#how-it-works-step-by-step)
+- [The Processing Pipeline & State Flow](#the-processing-pipeline--state-flow)
+  - [Media Lifecycle](#media-lifecycle)
+  - [Job Types & Outputs](#job-types--outputs)
+- [Job Queue & Reliability Semantics](#job-queue--reliability-semantics)
+  - [Redis Streams & Consumer Groups](#redis-streams--consumer-groups)
+  - [Failure Handling, Retries & DLQ](#failure-handling-retries--dlq)
+  - [Crash Recovery Loop](#crash-recovery-loop)
+  - [Graceful Shutdown](#graceful-shutdown)
+- [API Reference](#api-reference)
+  - [Authentication](#authentication)
+  - [Projects](#projects)
+  - [Media](#media)
+  - [Jobs](#jobs)
+  - [Renditions](#renditions)
+  - [Health & Ops](#health--ops)
+- [Repository Structure](#repository-structure)
+- [Package Architecture](#package-architecture)
+- [Local Development & Setup](#local-development--setup)
   - [Prerequisites](#prerequisites)
-  - [Configuration](#configuration)
-  - [Run locally](#run-locally)
-  - [Run with Docker](#run-with-docker)
-- [API reference](#api-reference)
-- [Testing](#testing)
-- [Makefile reference](#makefile-reference)
-- [Docker reference](#docker-reference)
-- [Future scope](#future-scope)
-- [Known limitations](#known-limitations)
+  - [Configuration (.env)](#configuration-env)
+  - [Running with Docker Compose](#running-with-docker-compose)
+  - [Running Locally (Bare Metal)](#running-locally-bare-metal)
+- [Testing Strategy](#testing-strategy)
+- [Roadmap](#roadmap)
+  - [Currently Implemented](#currently-implemented)
+  - [Future Systems-Engineering Experiments](#future-systems-engineering-experiments)
+- [Origin & Credits](#origin--credits)
 
 ---
 
-## Purpose
+## Core Architectural Mental Model
 
-YellowBird is not meant to be a production product. It is a playground for
-building — and understanding — a production-style media backend. A user uploads
-a media file; the system stores the original, creates processing jobs, and
-distributes them to background workers that run FFmpeg-based transcoding,
-thumbnail generation, preview generation, and (eventually) other media
-transformations.
+YellowBird separates responsibility across storage, coordination, state, and execution:
 
-The point is the machinery underneath the upload API. Each feature is a vehicle
-for learning real backend and systems-engineering concepts, implemented in the
-open rather than hidden behind a managed service:
+| Component | Technology | Core Responsibility |
+| :--- | :--- | :--- |
+| **API Server** | Go / Gin | Handles client HTTP requests, authentication, validation, durable record creation, and enqueuing jobs. |
+| **Durable State** | PostgreSQL 16+ | Single source of truth for users, projects, media metadata, job states, and rendition records. Uses row-level locks (`SELECT FOR UPDATE`) for race-free status synchronizations. |
+| **Job Queue** | Redis Streams | Ephemeral work-delivery and coordination substrate. Distributes job IDs to competing consumers via Consumer Groups (`XREADGROUP`). |
+| **Worker Nodes** | Go / FFmpeg | Headless, stateless compute consumers. Dequeues jobs, downloads source media, runs FFmpeg transformations, uploads output renditions, and updates durable state. |
+| **Object Storage** | Cloudinary (abstracted) | Stores original raw media uploads and processed rendition outputs behind a provider-agnostic `storage.Storage` interface. |
 
-- **Redis Streams** and consumer groups for the job queue.
-- **Reliable job processing** — at-least-once delivery, acknowledgement, and
-  pending-entry inspection.
-- **Retries and dead-letter queues** — reclaiming abandoned work and quarantining
-  permanently failing jobs.
-- **Concurrent workers** — multiple consumers competing over a single stream.
-- **Distributed processing** — API and worker as separate processes that
-  coordinate only through PostgreSQL and Redis.
-- **Storage abstractions** — a provider-agnostic `Storage` interface with a
-  Cloudinary implementation, so other backends can be swapped in.
-- **Fault recovery** — worker crashes, message reclamation, and job state repair.
-- **Multi-node execution** — the foundation for scaling workers horizontally.
+---
 
-The MVP is a concrete, working slice of that; it is deliberately not the end
-state.
+## System Architecture
 
-## What it does
+```mermaid
+flowchart TD
+    Client(["HTTP Client"]) -->|Multipart Upload / REST| API["API Server (cmd/api)"]
 
-1. A client registers and logs in, then creates a **project**.
-2. The client uploads a media file (image or video) to the project. The file is
-   stored in **Cloudinary** and its metadata is written to **PostgreSQL**.
-3. Uploading media fans out into **processing jobs**:
-   - every upload → a `thumbnail` job and a `preview` job
-   - video uploads additionally → three `transcode` jobs (360p, 720p, 1080p)
-4. Each job is pushed to a **Redis Stream**.
-5. The **worker** consumes the stream, downloads the source from Cloudinary,
-   runs **FFmpeg**, uploads the resulting **rendition** back to Cloudinary, and
-   records the rendition plus the final job state in PostgreSQL.
+    subgraph Storage & State
+        DB[("PostgreSQL\n(Durable State / ACID)")]
+        Redis[("Redis Streams\n(yellowbird:jobs)")]
+        Cloudinary[("Cloudinary\n(Object Storage)")]
+    end
 
-The API and worker communicate only through the shared database and the Redis
-stream — there is no direct RPC between them.
+    subgraph Worker Subsystem ["Worker Subsystem (cmd/worker)"]
+        W1["Worker Process 1\n(Consumer: host-pid)"]
+        W2["Worker Process 2\n(Consumer: host-pid)"]
+        Registry["Processor Registry"]
+        P_Thumb["Thumbnail Processor"]
+        P_Prev["Preview Processor"]
+        P_Trans["Transcode Processor"]
+        FFmpeg[["FFmpeg Engine"]]
+    end
 
-## Architecture
+    API -->|1. Store Raw Upload| Cloudinary
+    API -->|2. Insert Media & Jobs| DB
+    API -->|3. XADD Job ID| Redis
 
-```
-                    ┌──────────────────────────────────────────────┐
-                    │                   API (Gin)                 │
-                    │  auth · projects · media · jobs · renditions│
-                    └──────────────┬───────────────┬──────────────┘
-                                   │               │
-                          upload   │               │  job fan-out
-                                   ▼               ▼
-                            ┌───────────┐   ┌─────────────┐   ┌────────────┐
-                            │ Cloudinary│   │  PostgreSQL │   │ Redis      │
-                            │ (storage) │   │ (metadata,  │   │ Streams    │
-                            │           │   │  state)     │   │ (queue)    │
-                            └─────▲─────┘   └──────▲──────┘   └─────┬──────┘
-                                  │                │                │
-                        download/ │ upload         │ read/write     │ consume
-                                  │                │                │
-                            ┌─────┴────────────────┴────────────────┴──────┐
-                            │                 Worker                       │
-                            │  consumer group → registry → processors      │
-                            │  thumbnail · preview · transcode (FFmpeg)    │
-                            └──────────────────────────────────────────────┘
+    Redis -->|4. XREADGROUP| W1
+    Redis -->|4. XREADGROUP| W2
+
+    W1 & W2 -->|5. Dispatch by Job Type| Registry
+    Registry --> P_Thumb & P_Prev & P_Trans
+
+    P_Thumb & P_Prev & P_Trans -->|6. Download Source| Cloudinary
+    P_Thumb & P_Prev & P_Trans -->|7. Execute Transcode/Extract| FFmpeg
+    FFmpeg -->|8. Upload Rendition| Cloudinary
+    P_Thumb & P_Prev & P_Trans -->|9. Insert Rendition Record| DB
+
+    W1 & W2 -->|10. Update Job Status & Sync Media| DB
+    W1 & W2 -->|11. XACK / Move to DLQ| Redis
 ```
 
-### Processes
+---
 
-| Process   | Entrypoint          | Role                                                                               |
-|-----------|---------------------|------------------------------------------------------------------------------------|
-| API       | `cmd/api/main.go`   | Serves HTTP, owns a Redis client with consumer name `api` (used only to enqueue).  |
-| Worker    | `cmd/worker/main.go`| Owns its own Redis client with consumer name `<hostname>-<pid>`. Runs processors.  |
+## How It Works: Step-by-Step
 
-Each process builds its own `*queue.RedisQueue`. The API's queue is created once
-in `server.New` and injected into the job service; the worker's is created in
-`cmd/worker/main.go`. They are deliberately separate so each process has its own
-client connection and consumer identity.
+1. **Authentication & Project Creation**:
+   - A user registers and logs in via `/api/v1/users/login`. The API verifies the bcrypt password hash and issues a signed HMAC-SHA256 (HS256) JWT valid for 24 hours.
+   - The user creates a project (`POST /api/v1/projects`) to hold media assets.
 
-### Dependency flow (API)
+2. **Media Upload**:
+   - The user sends a `multipart/form-data` request with the media file to `POST /api/v1/media`.
+   - The API uploads the raw file to Cloudinary, extracts metadata (size, MIME type), and inserts a `Media` row into PostgreSQL with status `uploaded`.
 
-```
-server.New(cfg, db)
- └─ queue.RedisQueue("api") ──► s.redis
-      └─ registerRoutes()
-           job.NewService(jobRepo, s.redis)        ──► jobService
-           media.NewService(mediaRepo, projectRepo, cloudinaryStorage, jobService)
-```
+3. **Job Fan-Out**:
+   - In the same request cycle, `media.Service` fans out required background jobs:
+     - **Image**: creates a `thumbnail` job and a `preview` job.
+     - **Video**: creates a `thumbnail` job, a `preview` job, and three `transcode` jobs targeting resolutions **360p**, **720p**, and **1080p**.
+   - Each job is inserted into PostgreSQL with status `queued` and pushed to the Redis Stream `yellowbird:jobs` via `XADD`.
 
-`job.Service` is the only domain that holds the Redis queue (it enqueues job IDs).
-`media.Service` depends on `job.Service` for job creation and does not touch Redis
-directly. `project`, `user`, `rendition`, `auth`, and `storage` have no Redis
-dependency.
+4. **Worker Consumption**:
+   - Background workers listening on consumer group `yellowbird-workers` claim jobs via `XREADGROUP`.
+   - The worker marks the job as `running` in PostgreSQL and triggers `mediaRepository.SyncStatus()`, transitioning the parent media from `uploaded` $\rightarrow$ `processing`.
 
-## The processing pipeline
+5. **FFmpeg Execution & Rendition Upload**:
+   - The worker retrieves the processor registered for the job type (`thumbnail`, `preview`, or `transcode`).
+   - The processor downloads the source media, streams it to a local temporary file, executes the tailored FFmpeg command, uploads the resulting artifact to Cloudinary, and persists a `Rendition` row in PostgreSQL.
 
-```
-multipart upload
-  → API: media handler
-  → storage.Upload (Cloudinary)
-  → media repository (PostgreSQL row, status "uploaded")
-  → fan-out: job.Service.CreateJob for thumbnail + preview (+ 3 transcodes for video)
-       → job repository (PostgreSQL row, status "queued")
-       → queue.Enqueue (Redis XADD to "yellowbird:jobs")
-  → worker: XREADGROUP
-  → registry.Get(job.Type) → processor
-  → storage.Download (source) → FFmpeg → storage.Upload (rendition)
-  → rendition repository (PostgreSQL row)
-  → job.Service.CompleteJob → queue.Ack
-```
+6. **Job Completion & Media Status Sync**:
+   - The worker marks the job as `completed` in PostgreSQL and acknowledges the message in Redis via `XACK`.
+   - The worker invokes `mediaRepository.SyncStatus()`. Inside a database transaction with a `SELECT FOR UPDATE` row lock on the media row:
+     - If **all** sibling jobs for this media are `completed`, media status transitions to `ready`.
+     - If any job encountered terminal failure, media status transitions to `failed`.
 
-### Job types
+---
 
-| Type        | Input                | Output                            |
-|-------------|----------------------|-----------------------------------|
-| `thumbnail` | any media            | single-frame JPEG                 |
-| `preview`   | any media            | 10-second H.264/AAC MP4           |
-| `transcode` | video (360/720/1080) | height-scaled H.264/AAC MP4       |
+## The Processing Pipeline & State Flow
 
-## Retries and dead-lettering
+### Media Lifecycle
 
-The queue uses Redis Streams consumer groups:
-
-1. `XREADGROUP` delivers a job to a consumer; until `XACK`, it is **pending**.
-2. If processing succeeds, the worker calls `Ack`.
-3. If processing fails, the message stays pending. A recovery loop (every 30s)
-   inspects pending entries, `XCLAIM`s any that have been idle longer than 5
-   minutes, and retries them.
-4. After `maxRetries` (3) deliveries, the message is moved to the dead-letter
-   stream (`yellowbird:jobs:dlq`) and the job is marked `failed`.
-
-| Key                    | Value                          |
-|------------------------|--------------------------------|
-| Stream                 | `yellowbird:jobs`              |
-| Consumer group         | `yellowbird-workers`           |
-| Dead-letter stream     | `yellowbird:jobs:dlq`          |
-| Max retries            | 3                              |
-| Pending timeout        | 5 minutes                      |
-| Recovery interval      | 30 seconds                     |
-
-## Repository layout
-
-```
-cmd/
-  api/          API entrypoint
-  worker/       worker entrypoint
-internal/
-  auth/         JWT generation/validation, password, RBAC stubs
-  config/       env-based config loading (koanf + godotenv)
-  db/           Postgres connection + migrations
-  domain/
-    user/       registration, login, user CRUD
-    project/    projects (owner-scoped)
-    media/      media upload + job fan-out
-    job/        jobs + state machine + validation
-    rendition/  processed outputs (thumbnail/preview/transcode)
-  queue/        Redis Streams client (consumer groups, retries, DLQ)
-  storage/      storage provider contract + Cloudinary implementation
-  worker/       worker runtime, processor registry, FFmpeg processors
-  server/       Gin engine, routing, middleware
-  mocks/        testify mocks for domain interfaces (tests)
-  testutil/     test helpers (testcontainers Postgres, etc.)
-migrations/     SQL migrations (reserved)
-deployments/    Dockerfiles + docker-compose
-tests/
-  integration/  integration tests (Postgres via testcontainers)
-  e2e/          end-to-end pipeline test (real FFmpeg)
-scripts/
-  chaoscow/     chaos/ops scripts
+```mermaid
+stateDiagram-v2
+    [*] --> uploaded: API Upload Succeeded
+    uploaded --> processing: First Worker Starts Job
+    processing --> processing: Sibling Jobs Completing
+    processing --> ready: ALL Jobs Completed
+    processing --> failed: Terminal Job Failure / DLQ
+    ready --> [*]
+    failed --> [*]
 ```
 
-Domains follow a consistent layering: `model.go` (GORM entities), `dto.go`
-(request/response contracts), `repository.go` (DB access behind an interface),
-`service.go` (business logic), `handler.go` (HTTP), `routes.go` (route wiring).
+- **`uploaded`**: Media record persisted; child processing jobs created in PostgreSQL and enqueued in Redis.
+- **`processing`**: At least one child job has transitioned to `running` or `queued`.
+- **`ready`**: All child jobs (`thumbnail`, `preview`, and `transcode` variants) have reached `completed`.
+- **`failed`**: A child job suffered terminal failure (e.g. exceeded retry limit, unknown job type, unrecoverable FFmpeg error).
 
-## Tech stack
+### Job Types & Outputs
 
-- **Language**: Go 1.26
-- **HTTP**: Gin
-- **Database**: PostgreSQL (GORM)
-- **Queue**: Redis Streams (go-redis)
-- **Storage**: Cloudinary
-- **Video**: FFmpeg
-- **Auth**: JWT (HS256, 24h expiry)
-- **Config**: koanf + godotenv
-- **Testing**: stdlib `testing`, testify, miniredis, testcontainers-go
+| Job Type | Triggered On | Target Parameter | FFmpeg Pipeline Specs | Output Rendition |
+| :--- | :--- | :--- | :--- | :--- |
+| `thumbnail` | Image / Video | None | `-frames:v 1 -q:v 2` | Single-frame JPEG image |
+| `preview` | Image / Video | None | `-t 10 -c:v libx264 -preset fast -crf 28 -c:a aac -movflags +faststart` | 10-second compressed MP4 clip |
+| `transcode` | Video Only | `360` | `-vf scale=-2:360 -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart` | 360p H.264 / AAC MP4 |
+| `transcode` | Video Only | `720` | `-vf scale=-2:720 -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart` | 720p H.264 / AAC MP4 |
+| `transcode` | Video Only | `1080` | `-vf scale=-2:1080 -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -movflags +faststart` | 1080p H.264 / AAC MP4 |
 
-## Getting started
+---
 
-### Prerequisites
+## Job Queue & Reliability Semantics
 
-- Go 1.26+
-- PostgreSQL 16+ (or a Neon connection string)
-- Redis 7+
-- FFmpeg (worker only)
-- A Cloudinary account (cloud name, API key, API secret)
-- Docker + Docker Compose (optional, for containerized runs and integration tests)
+### Redis Streams & Consumer Groups
 
-### Configuration
+YellowBird uses Redis Streams for distributed, at-least-once job delivery without message loss:
 
-Configuration is read from environment variables. Copy the example and fill it in:
+- **Stream Key**: `yellowbird:jobs`
+- **Consumer Group**: `yellowbird-workers`
+- **Consumer Identity**: `<hostname>-<pid>` (uniquely identifies every running worker process)
+- **Dead-Letter Stream**: `yellowbird:jobs:dlq`
+- **Claim Timeout (Idle)**: 5 minutes
+- **Recovery Interval**: 30 seconds
 
-```sh
-cp .env.example .env
+```
+[API] --- XADD ---> [yellowbird:jobs Stream]
+                          │
+            ┌─────────────┴─────────────┐
+            ▼                           ▼
+    Worker 1 (host-101)          Worker 2 (host-204)
+     XREADGROUP COUNT 1           XREADGROUP COUNT 1
+            │                           │
+         Pending                     Pending
+            │                           │
+       (Processing)                (Processing)
+            │                           │
+          XACK                        XACK
 ```
 
-| Variable                | Purpose                                   |
-|-------------------------|-------------------------------------------|
-| `PORT`                  | HTTP port for the API                     |
-| `DATABASE_URL`          | PostgreSQL connection string              |
-| `JWT_SECRET`            | secret used to sign JWTs                  |
-| `REDIS_ADDR`            | Redis address (`host:port`)               |
-| `REDIS_PASSWORD`        | Redis password (empty for local)          |
-| `REDIS_DB`              | Redis database index                      |
-| `CLOUDINARY_CLOUD_NAME` | Cloudinary cloud name                     |
-| `CLOUDINARY_API_KEY`    | Cloudinary API key                        |
-| `CLOUDINARY_API_SECRET` | Cloudinary API secret                     |
+### Failure Handling, Retries & DLQ
 
-### Run locally
-
-Start the backing services (or point `DATABASE_URL`/`REDIS_ADDR` at existing ones):
-
-```sh
-docker compose -f deployments/docker-compose.yml up -d postgres redis
+```mermaid
+flowchart TD
+    A["Job Dequeued (Delivery 1)"] --> B["Worker Starts Job (DB: running)"]
+    B --> C{"FFmpeg / Processor Result"}
+    
+    C -->|Success| D["DB: completed"]
+    D --> E["Sync Media Status (all done? -> ready)"]
+    E --> F["XACK Message"]
+    
+    C -->|Failure| G["DB: reset status to queued"]
+    G --> H["Message left Pending in Redis PEL"]
+    
+    H --> I["Recovery Loop (runs every 30s)"]
+    I --> J{"Message Idle > 5m?"}
+    J -->|No| H
+    J -->|Yes| K{"Delivery Count >= 3?"}
+    
+    K -->|No (Delivery 2, 3)| L["XCLAIM message by active worker"]
+    L --> B
+    
+    K -->|Yes (Exhausted)| M["DB: fail job ('max retry limit reached')"]
+    M --> N["Sync Media Status (media -> failed)"]
+    N --> O["XADD to yellowbird:jobs:dlq"]
+    O --> P["XACK original message from main stream"]
 ```
 
-Then run each process:
+1. **At-Least-Once Delivery**: When a worker dequeues a message, Redis moves it to the **Pending Entries List (PEL)**. It remains there until explicitly acknowledged.
+2. **Transient Failures**: If processing fails, `handleJobFailure()` resets the PostgreSQL job status from `running` back to `queued` and leaves the message pending in Redis.
+3. **Recovery of Abandoned Messages**: If a worker process crashes mid-job, the message stays idle in the PEL. Every 30 seconds, `Worker.recoverPending()` inspects the PEL for messages idle for $\ge 5\text{ minutes}$ and claims them via `XCLAIM`.
+4. **Dead-Letter Queue (DLQ)**: Once a message reaches 3 delivery attempts (`deliveryCount >= 3`), it is quarantined:
+   - The job is marked `failed` in PostgreSQL.
+   - `mediaRepository.SyncStatus()` transitions the parent media to `failed`.
+   - The job is written to `yellowbird:jobs:dlq` with its error context and delivery count.
+   - The original message is acknowledged (`XACK`) and removed from `yellowbird:jobs`.
 
-```sh
-go run ./cmd/api
-go run ./cmd/worker
+### Graceful Shutdown
+
+Both the API and Worker processes register context cancellation via `signal.NotifyContext` listening for `SIGINT` (Ctrl+C) and `SIGTERM`:
+
+- **API (`cmd/api`)**:
+  - Stops accepting incoming HTTP connections.
+  - Drains active in-flight requests within a 10-second timeout window.
+  - Closes Redis connections and the PostgreSQL connection pool.
+- **Worker (`cmd/worker`)**:
+  - Halts the recovery ticker and dequeue loop.
+  - Finishes active processor execution.
+  - Closes Redis and PostgreSQL connections cleanly without abandoning running tasks in invalid states.
+
+---
+
+## API Reference
+
+All responses return standard JSON. Endpoints marked **Protected** require the HTTP header:
+`Authorization: Bearer <token>`
+
+### Authentication
+
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/users/register` | Public | Register a new user account with hashed password. |
+| `POST` | `/api/v1/users/login` | Public | Authenticate user and receive a signed JWT token. |
+| `GET` | `/api/v1/users` | Public | List all user accounts. |
+| `GET` | `/api/v1/users/:id` | Public | Fetch user profile by UUID. |
+| `DELETE` | `/api/v1/users/:id` | Public | Remove a user account. |
+
+#### Sample Login Response:
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "7bf3b6e8-2512-4c28-98e3-514782bb0dc1",
+    "name": "Alex",
+    "email": "alex@example.com",
+    "created_at": "2026-09-08T00:00:00Z",
+    "updated_at": "2026-09-08T00:00:00Z"
+  }
+}
 ```
-
-The API migrates the schema on startup; the worker assumes the schema already
-exists, so start the API first.
-
-### Run with Docker
-
-```sh
-docker compose -f deployments/docker-compose.yml up --build
-```
-
-This builds and runs `postgres`, `redis`, `api`, and `worker`. The compose file
-interpolates `JWT_SECRET` and `CLOUDINARY_*` from the environment (or a `.env`
-file), so export them first:
-
-```sh
-export JWT_SECRET=...
-export CLOUDINARY_CLOUD_NAME=...
-export CLOUDINARY_API_KEY=...
-export CLOUDINARY_API_SECRET=...
-```
-
-## API reference
-
-All responses are JSON. Protected endpoints require
-`Authorization: Bearer <token>`.
-
-### Health
-
-| Method | Path       | Auth | Description        |
-|--------|------------|------|--------------------|
-| GET    | `/health`  | No   | Liveness check     |
-
-### Users
-
-| Method | Path                       | Auth | Description                              |
-|--------|----------------------------|------|------------------------------------------|
-| POST   | `/api/v1/users/register`   | No   | Register a user                          |
-| POST   | `/api/v1/users/login`      | No   | Authenticate a user                      |
-| GET    | `/api/v1/users`            | No   | List users                               |
-| GET    | `/api/v1/users/:id`        | No   | Get a user                               |
-| DELETE | `/api/v1/users/:id`        | No   | Delete a user                            |
-
-> User endpoints are currently not behind the auth middleware.
 
 ### Projects
 
-| Method | Path                       | Auth | Description                    |
-|--------|----------------------------|------|--------------------------------|
-| POST   | `/api/v1/projects`         | Yes  | Create a project               |
-| GET    | `/api/v1/projects`         | Yes  | List the caller's projects     |
-| GET    | `/api/v1/projects/:id`     | Yes  | Get a project                  |
-| PUT    | `/api/v1/projects/:id`     | Yes  | Update a project               |
-| DELETE | `/api/v1/projects/:id`     | Yes  | Delete a project               |
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/projects` | Protected | Create a new project owned by the authenticated user. |
+| `GET` | `/api/v1/projects` | Protected | List all projects owned by the caller. |
+| `GET` | `/api/v1/projects/:id` | Protected | Get single project details. |
+| `PUT` | `/api/v1/projects/:id` | Protected | Update project metadata (e.g. name, description). |
+| `DELETE` | `/api/v1/projects/:id` | Protected | Delete project and associated records. |
 
 ### Media
 
-| Method | Path                    | Auth | Description                                          |
-|--------|-------------------------|------|------------------------------------------------------|
-| POST   | `/api/v1/media`         | Yes  | Upload media (`multipart/form-data`)                 |
-| GET    | `/api/v1/media`         | Yes  | List media (`?project_id=`)                          |
-| GET    | `/api/v1/media/:id`     | Yes  | Get media                                            |
-| PUT    | `/api/v1/media/:id`     | Yes  | Update media status                                  |
-| DELETE | `/api/v1/media/:id`     | Yes  | Delete media                                         |
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/media` | Protected | Upload media file (`multipart/form-data`), persist record, and trigger job fan-out. |
+| `GET` | `/api/v1/media` | Protected | List media assets (filterable by `?project_id=<uuid>`). |
+| `GET` | `/api/v1/media/:id` | Protected | Get media status, storage key, and metadata. |
+| `PUT` | `/api/v1/media/:id` | Protected | Update media attributes. |
+| `DELETE` | `/api/v1/media/:id` | Protected | Delete media record. |
 
-Upload request (`Content-Type: multipart/form-data`):
-
-- `project_id` — form field (UUID)
-- `file` — the media file
+#### Upload Multipart Payload:
+- `project_id`: UUID of the parent project (form value).
+- `file`: The binary media file (`multipart/form-data`).
 
 ### Jobs
 
-| Method | Path                    | Auth | Description                            |
-|--------|-------------------------|------|----------------------------------------|
-| POST   | `/api/v1/jobs`          | Yes  | Create a job                           |
-| GET    | `/api/v1/jobs`          | Yes  | List jobs (`?media_id=`)               |
-| GET    | `/api/v1/jobs/:id`      | Yes  | Get a job                              |
-| DELETE | `/api/v1/jobs/:id`      | Yes  | Delete a job                           |
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/jobs` | Protected | Manually trigger a processing job. |
+| `GET` | `/api/v1/jobs` | Protected | List jobs (filterable by `?media_id=<uuid>`). |
+| `GET` | `/api/v1/jobs/:id` | Protected | Get specific job status and error logs. |
+| `DELETE` | `/api/v1/jobs/:id` | Protected | Delete a job entry. |
 
-Create-job body:
-
+#### Create Job Payload:
 ```json
 {
-  "media_id": "uuid",
-  "type": "thumbnail | preview | transcode",
+  "media_id": "7bf3b6e8-2512-4c28-98e3-514782bb0dc1",
+  "type": "transcode",
   "target_height": 720
 }
 ```
 
-`target_height` is required for `transcode` (360, 720, or 1080) and must be
-omitted for `thumbnail`/`preview`.
-
 ### Renditions
 
-| Method | Path                        | Auth | Description                              |
-|--------|-----------------------------|------|------------------------------------------|
-| POST   | `/api/v1/renditions`        | Yes  | Create a rendition                       |
-| GET    | `/api/v1/renditions`        | Yes  | List renditions (`?media_id=`)           |
-| GET    | `/api/v1/renditions/:id`    | Yes  | Get a rendition                          |
-| DELETE | `/api/v1/renditions/:id`    | Yes  | Delete a rendition                       |
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/renditions` | Protected | Record a completed rendition metadata entry. |
+| `GET` | `/api/v1/renditions` | Protected | List output renditions (filterable by `?media_id=<uuid>`). |
+| `GET` | `/api/v1/renditions/:id` | Protected | Get specific rendition details and download URL. |
+| `DELETE` | `/api/v1/renditions/:id` | Protected | Delete a rendition entry. |
 
-## Testing
+### Health & Ops
 
-Tests are split into three tiers:
-
-| Tier        | Command                              | Requires                        |
-|-------------|--------------------------------------|---------------------------------|
-| Unit        | `go test ./...`                      | nothing (hermetic)              |
-| Integration | `go test -tags integration ./...`    | Docker (testcontainers Postgres)|
-| E2E         | `go test -tags e2e ./tests/e2e/...`  | Docker + FFmpeg                 |
-
-Unit tests use miniredis (in-process Redis) and testify mocks; integration tests
-spin up a throwaway PostgreSQL container; the E2E test runs the full pipeline
-with a real FFmpeg against a local-disk storage double.
-
-## Makefile reference
-
-| Command               | Action                                            |
-|-----------------------|---------------------------------------------------|
-| `make test`           | Run unit tests (`go test ./...`)                  |
-| `make test-unit`      | Run unit tests                                    |
-| `make test-integration`| Run integration tests (`-tags integration`)      |
-| `make test-e2e`       | Run end-to-end tests (`-tags e2e`)                |
-| `make test-all`       | Run unit + integration + e2e                      |
-| `make vet`            | Run `go vet ./...`                                |
-| `make tidy`           | Run `go mod tidy`                                 |
-
-## Docker reference
-
-| Command                                                                 | Action                                    |
-|-------------------------------------------------------------------------|-------------------------------------------|
-| `docker compose -f deployments/docker-compose.yml up --build`           | Build and run the full stack              |
-| `docker compose -f deployments/docker-compose.yml up -d postgres redis` | Start only the backing services           |
-| `docker compose -f deployments/docker-compose.yml down`                 | Stop the stack                            |
-| `docker build -f deployments/Dockerfile.api -t yellowbird-api .`        | Build the API image alone                 |
-| `docker build -f deployments/Dockerfile.worker -t yellowbird-worker .`  | Build the worker image alone              |
-
-The worker image includes FFmpeg; the API image does not.
-
-## Future scope
-
-The roadmap is intentionally larger than the MVP. The project is meant to keep
-raising the difficulty of the problems it solves rather than treating the MVP as
-final.
-
-**Workers and scaling**
-
-- Distributed, horizontally scalable workers.
-- Worker autoscaling based on queue depth and load.
-- Smarter scheduling and job prioritization.
-- Multi-node execution with per-node consumer identity and metrics.
-
-**Processing quality**
-
-- Per-title, quality-aware encoding.
-- Intelligent bitrate and codec selection.
-- Video-quality optimisation.
-- Adaptive processing driven by source characteristics (resolution, codec,
-  complexity).
-
-**Media intelligence**
-
-- ML-based thumbnail and frame selection.
-- Geolocation and context-aware media processing.
-
-**Operability**
-
-- Stronger observability and tracing (OpenTelemetry, structured logging,
-  per-job trace IDs).
-- Chaos and failure testing (fault injection, partition and crash drills).
-- More sophisticated media-processing pipelines (audio extraction, packaging,
-  dynamic packaging, multi-track).
-
-## Known limitations
-
-- Login currently returns the user object; JWT issuance (`LoginResponse` with a
-  token) is defined but not yet wired into the handler.
-- User management endpoints (`/users`) are not protected by the auth middleware.
-- Media status is set to `uploaded` on upload; there is no listener yet that
-  flips it to `ready` when all renditions complete.
-- `migrations/` and the YAML configs under `configs/` are reserved/stubs.
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Public | Liveness check returning HTTP 200 OK. |
 
 ---
 
-## CI
+## Repository Structure
 
-GitHub Actions (`.github/workflows/ci.yaml`) runs on push/PR to `main` and
-`develop`: formatting check (`gofmt`), `go vet`, unit tests, integration tests,
-E2E tests, and Docker image builds for both the API and the worker.
+```
+YellowBird/
+├── cmd/
+│   ├── api/                  # API entrypoint (HTTP server, router wiring, graceful shutdown)
+│   └── worker/               # Background worker entrypoint (processors, Redis consumer, recovery)
+├── internal/
+│   ├── auth/                 # JWT generation/validation (HS256) & bcrypt password hashing
+│   ├── config/               # Environment configuration loader (koanf + godotenv)
+│   ├── db/                   # PostgreSQL connection pool & schema auto-migration
+│   ├── domain/               # Domain modules (clean architecture)
+│   │   ├── user/             # User entity, repository, service, handler, routes
+│   │   ├── project/          # Project management (owner-scoped)
+│   │   ├── media/            # Media uploads, fan-out logic, status synchronization
+│   │   ├── job/              # Job state machine, validation, stream enqueue
+│   │   └── rendition/        # Output renditions (thumbnail, preview, transcodes)
+│   ├── queue/                # Redis Streams client (XADD, XREADGROUP, XCLAIM, XACK, DLQ)
+│   ├── storage/              # Provider-agnostic storage interface + Cloudinary implementation
+│   ├── worker/               # Worker runtime, processor registry, FFmpeg execution engines
+│   ├── server/               # Gin web server, routing, middleware (Recovery, Logging, Auth)
+│   ├── mocks/                # Generated/mock implementations for unit testing
+│   └── testutil/             # Test containers (isolated throwaway PostgreSQL via Docker)
+├── deployments/
+│   ├── Dockerfile.api        # Minimal alpine container for API
+│   ├── Dockerfile.worker     # Alpine container for worker with FFmpeg installed
+│   └── docker-compose.yml    # Multi-container orchestration (Postgres, Redis, API, Worker)
+├── tests/
+│   ├── integration/          # PostgreSQL + Redis integration test suite (testcontainers)
+│   └── e2e/                  # End-to-end pipeline verification with real FFmpeg
+├── Makefile                  # Build, test, and vet shortcuts
+└── go.mod                    # Go module dependencies (Go 1.26+)
+```
 
 ---
 
-<img width="1784" height="1004" alt="Yellowbird" src="https://github.com/user-attachments/assets/3da40bd3-bca3-4b66-9bdc-d94d29264698" />
+## Package Architecture
 
-*kiiroitori (黄色い鳥)* — named after the Porsche 911 930 RUF CTR "Yellowbird".
-The RUF CTR is known internally and model-designated by Ruf Automobile as the
-CTR, which stands for Group C Turbo RUF. One of my favourite pieces of art. 
-Built with ❤️ by amaanworks/dextertwts/dexisback
+```mermaid
+flowchart TD
+    subgraph Presentation & Routing
+        API_Main["cmd/api/main.go"] --> Server["internal/server"]
+        Server --> Middleware["internal/server/middleware\n(Auth, RequestID, Recovery, Logging)"]
+        Server --> Handlers["Domain Handlers\n(user, project, media, job, rendition)"]
+    end
+
+    subgraph Business Logic ["Domain Layer (internal/domain)"]
+        Handlers --> Services["Domain Services\n(user, project, media, job, rendition)"]
+        Services --> Repositories["Domain Repositories\n(GORM / SQL)"]
+        media_svc["media.Service"] -->|Job Fan-Out| job_svc["job.Service"]
+    end
+
+    subgraph Infrastructure Layer
+        job_svc --> Queue["internal/queue\n(Redis Streams)"]
+        media_svc --> Storage["internal/storage\n(Cloudinary)"]
+        Repositories --> DB_Pkg["internal/db\n(PostgreSQL Pool)"]
+        Services --> Auth_Pkg["internal/auth\n(JWT & Bcrypt)"]
+    end
+
+    subgraph Worker Runtime
+        Worker_Main["cmd/worker/main.go"] --> Worker["internal/worker\n(Worker Loop & DLQ)"]
+        Worker --> Registry["internal/worker.Registry"]
+        Registry --> Processors["Processors\n(Thumbnail, Preview, Transcode)"]
+        Processors --> FFmpeg_Exec[["FFmpeg Exec / Local Temp"]]
+        Processors --> Storage
+        Processors --> Repositories
+    end
+```
+
+---
+
+## Local Development & Setup
+
+### Prerequisites
+
+- **Go**: 1.26+ installed
+- **PostgreSQL**: 16+ (or Docker)
+- **Redis**: 7+ (or Docker)
+- **FFmpeg**: Installed locally and accessible in `$PATH` (required for running `cmd/worker` locally)
+- **Cloudinary Account**: Cloud Name, API Key, API Secret
+
+### Configuration (.env)
+
+Copy `.env.example` to `.env` and supply your credentials:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `PORT` | API HTTP port | `8080` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgres://yellowbird:yellowbird@localhost:5432/yellowbird?sslmode=disable` |
+| `JWT_SECRET` | Secret key used for signing JWT tokens | `your_secret_key_change_me` |
+| `REDIS_ADDR` | Redis address | `localhost:6379` |
+| `REDIS_PASSWORD` | Redis password (if any) | `""` |
+| `REDIS_DB` | Redis database index | `0` |
+| `CLOUDINARY_CLOUD_NAME` | Cloudinary Cloud Name | `your_cloud_name` |
+| `CLOUDINARY_API_KEY` | Cloudinary API Key | `your_api_key` |
+| `CLOUDINARY_API_SECRET` | Cloudinary API Secret | `your_api_secret` |
+
+### Running with Docker Compose
+
+The easiest way to run the entire system (including Postgres, Redis, API, and Worker with FFmpeg) is Docker Compose:
+
+```bash
+docker compose -f deployments/docker-compose.yml up --build
+```
+
+To run only the backing data services:
+
+```bash
+docker compose -f deployments/docker-compose.yml up -d postgres redis
+```
+
+### Running Locally (Bare Metal)
+
+1. Start PostgreSQL and Redis:
+   ```bash
+   docker compose -f deployments/docker-compose.yml up -d postgres redis
+   ```
+
+2. Start the API server:
+   ```bash
+   go run ./cmd/api
+   ```
+
+3. Start the background worker (in a separate terminal):
+   ```bash
+   go run ./cmd/worker
+   ```
+
+---
+
+## Testing Strategy
+
+The repository employs a multi-tiered testing strategy:
+
+| Test Tier | Scope | Requirements | Command |
+| :--- | :--- | :--- | :--- |
+| **Unit Tests** | Fast, hermetic tests using mocks and in-memory `miniredis` | None | `go test ./...`<br>`make test` |
+| **Race Detector** | Verifies zero data races across concurrent queues and workers | None | `go test -race ./internal/...` |
+| **Static Analysis** | Go static analysis and compiler vetting | None | `go vet ./...`<br>`make vet` |
+| **Integration Tests** | Tests real PostgreSQL transactions, row locking (`SELECT FOR UPDATE`), and Redis streams | Docker (testcontainers) | `go test -tags=integration ./...`<br>`make test-integration` |
+| **End-to-End (E2E)** | Full lifecycle from upload $\rightarrow$ stream $\rightarrow$ real FFmpeg execution $\rightarrow$ rendition | Docker + FFmpeg | `go test -tags=e2e ./tests/e2e/...`<br>`make test-e2e` |
+
+To run the complete test suite across all tiers:
+
+```bash
+make test-all
+```
+
+### Continuous Integration (CI)
+
+GitHub Actions (`.github/workflows/ci.yaml`) automatically validates every push and pull request targeting `main` and `develop`:
+
+1. **Dependency Verification**: `go mod verify`
+2. **Formatting Enforcement**: `gofmt -l .` (fails on unformatted files)
+3. **Static Analysis**: `go vet ./...`
+4. **Hermetic Unit Tests**: `go test ./...`
+5. **Race Detection**: `go test -race ./internal/...`
+6. **PostgreSQL Integration Tests**: `go test -tags=integration ./tests/integration/...` (via Docker testcontainers)
+7. **FFmpeg End-to-End Pipeline**: `go test -tags=e2e ./tests/e2e/...`
+8. **Binary Builds**: `go build ./cmd/api` and `go build ./cmd/worker`
+9. **Docker Builds**: Validates `deployments/Dockerfile.api` and `deployments/Dockerfile.worker`
+
+To run the primary validation checks locally before pushing:
+
+```bash
+gofmt -l .
+go vet ./...
+go test -count=1 ./...
+go test -race -count=1 ./internal/...
+go build -o /dev/null ./cmd/api
+go build -o /dev/null ./cmd/worker
+```
+
+
+---
+
+## Roadmap
+
+### Currently Implemented
+
+- [x] RESTful API for Users, Projects, Media, Jobs, and Renditions.
+- [x] JWT Authentication (HS256) & Bcrypt password security.
+- [x] Asynchronous job fan-out (Thumbnail, Preview, 360p/720p/1080p Transcoding).
+- [x] Cloudinary storage abstraction with upload/download streaming.
+- [x] Redis Streams consumer groups with per-worker consumer identities.
+- [x] FFmpeg media processing pipeline for video scaling and image extraction.
+- [x] 3-attempt retry semantics and Dead-Letter Queue (`yellowbird:jobs:dlq`).
+- [x] 30s background recovery loop claiming abandoned jobs ($> 5\text{ min}$ idle).
+- [x] PostgreSQL media status lifecycle (`uploaded` $\rightarrow$ `processing` $\rightarrow$ `ready` / `failed`) with row-level transaction locks.
+- [x] Idiomatic graceful shutdown (`signal.NotifyContext`) for API and Worker.
+- [x] Multi-tier test suite (Unit, Race, Integration with testcontainers, E2E with real FFmpeg).
+
+### Future Systems-Engineering Experiments
+
+- [ ] **Dynamic Horizontal Worker Autoscaling**: KEDA or custom scaler reacting dynamically to Redis stream pending queue depth.
+- [ ] **Job Prioritization & Quality-Aware Encoding**: Priority lanes for thumbnail/preview vs expensive 1080p transcodes.
+- [ ] **Adaptive Source-Driven Transcoding**: Inspect source bitrate/resolution using `ffprobe` to skip unnecessary upscaling.
+- [ ] **Distributed Tracing & Metrics**: OpenTelemetry spans propagating across HTTP request $\rightarrow$ Redis stream $\rightarrow$ Worker FFmpeg execution.
+- [ ] **Multi-Node Consumer Metrics**: Prometheus metrics exporter for worker processing latency, PEL size, and DLQ rates.
+- [ ] **ML-Based Frame Selection**: Intelligent scene-detection for keyframe thumbnail selection.
+
+---
+
+## Origin & Credits
+
+*kiiroitori (黄色い鳥)* — named after the legendary Porsche 911 930 RUF CTR "Yellowbird". The RUF CTR is known internally and model-designated by Ruf Automobile as the CTR (Group C Turbo RUF).
+
+Built with engineering passion by **amaanworks** / **dextertwts** / **dexisback**.
