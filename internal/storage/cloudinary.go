@@ -2,12 +2,17 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/cloudinary/cloudinary-go/v2"
 	"github.com/cloudinary/cloudinary-go/v2/api/uploader"
+	"github.com/google/uuid"
 )
 
 type CloudinaryStorage struct {
@@ -28,21 +33,38 @@ func (s *CloudinaryStorage) Upload(
 	ctx context.Context,
 	input UploadInput,
 ) (*UploadResult, error) {
+	publicID := uuid.NewString()
+
 	result, err := s.client.Upload.Upload(
 		ctx,
 		input.Reader,
 		uploader.UploadParams{
-			PublicID: input.FileName,
+			PublicID: publicID,
 			Folder:   "YellowBird",
 		})
 	if err != nil {
 		return nil, err
 	}
+	if result == nil {
+		return nil, errors.New("cloudinary upload returned nil result")
+	}
+	if result.Error.Message != "" {
+		return nil, fmt.Errorf("cloudinary upload failed: %s", result.Error.Message)
+	}
+	if result.PublicID == "" {
+		return nil, errors.New("cloudinary upload returned empty public ID")
+	}
 
 	originalFileName := input.FileName
 	mimeType := input.MimeType
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		if result.ResourceType != "" && result.Format != "" {
+			mimeType = fmt.Sprintf("%s/%s", result.ResourceType, result.Format)
+		} else if extMime := mime.TypeByExtension(filepath.Ext(originalFileName)); extMime != "" {
+			mimeType = extMime
+		}
+	}
 
-	// Cloudinary result is preferred, but keep caller-provided size as fallback.
 	size := int64(result.Bytes)
 	if size <= 0 && input.Size > 0 {
 		size = input.Size
@@ -61,17 +83,30 @@ func (s *CloudinaryStorage) Delete(
 	ctx context.Context,
 	storageKey string,
 ) error {
-	_, err := s.client.Upload.Destroy(
+	res, err := s.client.Upload.Destroy(
 		ctx,
 		uploader.DestroyParams{PublicID: storageKey},
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if res != nil && res.Error.Message != "" {
+		return fmt.Errorf("cloudinary destroy failed: %s", res.Error.Message)
+	}
+	return nil
 }
 
-// implemneting GetURL with a mimeType (and later we implement the download() with a mimeType param asw)
-func (s *CloudinaryStorage) GetURL(ctx context.Context, storageKey string) (string, error) {
-	// Try as an image first, then as a video. The cloudinary builders return
-	// an error if they cannot build a URL for the provided public ID.
+func (s *CloudinaryStorage) getURLForMime(storageKey string, mimeType string) (string, error) {
+	if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
+		if vid, err := s.client.Video(storageKey); err == nil && vid != nil {
+			return vid.String()
+		}
+	} else if strings.HasPrefix(mimeType, "image/") {
+		if img, err := s.client.Image(storageKey); err == nil && img != nil {
+			return img.String()
+		}
+	}
+
 	if img, err := s.client.Image(storageKey); err == nil && img != nil {
 		if u, err := img.String(); err == nil {
 			return u, nil
@@ -84,11 +119,21 @@ func (s *CloudinaryStorage) GetURL(ctx context.Context, storageKey string) (stri
 		}
 	}
 
+	if f, err := s.client.File(storageKey); err == nil && f != nil {
+		if u, err := f.String(); err == nil {
+			return u, nil
+		}
+	}
+
 	return "", fmt.Errorf("failed to build cloudinary URL for %s", storageKey)
 }
 
+func (s *CloudinaryStorage) GetURL(ctx context.Context, storageKey string) (string, error) {
+	return s.getURLForMime(storageKey, "")
+}
+
 func (s *CloudinaryStorage) Download(ctx context.Context, storageKey string, mimeType string) (io.ReadCloser, error) {
-	url, err := s.GetURL(ctx, storageKey)
+	url, err := s.getURLForMime(storageKey, mimeType)
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +154,4 @@ func (s *CloudinaryStorage) Download(ctx context.Context, storageKey string, mim
 	}
 
 	return resp.Body, nil
-
 }
-
-//we implement the download() method in this cloudinary provider. cloudinary can generate urls for both images and videos, so we can use the publicID(storageKey)
-//to build the appropriate url and stream the asset back to the worker '
-//but storage key doesnt alone tell us whether the file is image() or video()

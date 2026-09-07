@@ -16,58 +16,54 @@ func NewHandler(service Service) *Handler {
 		service: service,
 	}
 }
-///////
+
 func (h *Handler) CreateMedia(c *gin.Context) {
 	projectID, err := uuid.Parse(c.PostForm("project_id"))
-	if err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project id",})
-		return 
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid project id",
+		})
+		return
 	}
-	fileHeader, err := c.FormFile("file")
-	if err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
-		return 
+
+	header, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "file is required",
+		})
+		return
 	}
 
 	ownerIDValue, exists := c.Get("userID")
-	if !exists{
+	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "missing unauthenticated user",
+			"error": "missing authenticated user",
 		})
-		return 
+		return
 	}
 	ownerID, ok := ownerIDValue.(uuid.UUID)
-	if !ok{
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid authenticated user",
 		})
-		return 
+		return
 	}
 
-	media, err := h.service.CreateMedia(c.Request.Context(), ownerID, projectID, fileHeader)
-	if err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return 
+	media, err := h.service.CreateMedia(
+		c.Request.Context(),
+		ownerID,
+		projectID,
+		header,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
 	}
 	c.JSON(http.StatusCreated, media)
-
 }
-//above CreateMedia changes :
-// This changes the request from:
-// JSON
-// {
-//   "project_id": "..."
-// }
 
-// to:
-// multipart/form-data
-// project_id = ...
-// file       = movie.mp4
-
-
-
-
-///////
 func (h *Handler) GetMedia(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -76,11 +72,7 @@ func (h *Handler) GetMedia(c *gin.Context) {
 		})
 		return
 	}
-
-	media, err := h.service.GetMedia(
-		c.Request.Context(),
-		id,
-	)
+	media, err := h.service.GetMedia(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": err.Error(),
@@ -92,33 +84,20 @@ func (h *Handler) GetMedia(c *gin.Context) {
 }
 
 func (h *Handler) ListMedia(c *gin.Context) {
-	projectIDParam := c.Query("project_id")
-	if projectIDParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "missing project_id query parameter",
-		})
-		return
-	}
-
-	projectID, err := uuid.Parse(projectIDParam)
+	projectID, err := uuid.Parse(c.Query("project_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "invalid project id",
 		})
 		return
 	}
-
-	media, err := h.service.ListMedia(
-		c.Request.Context(),
-		projectID,
-	)
+	media, err := h.service.ListMedia(c.Request.Context(), projectID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
 		return
 	}
-
 	c.JSON(http.StatusOK, media)
 }
 
@@ -132,7 +111,6 @@ func (h *Handler) UpdateMedia(c *gin.Context) {
 	}
 
 	var req UpdateMediaRequest
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -140,13 +118,9 @@ func (h *Handler) UpdateMedia(c *gin.Context) {
 		return
 	}
 
-	media, err := h.service.UpdateMedia(
-		c.Request.Context(),
-		id,
-		req,
-	)
+	media, err := h.service.UpdateMedia(c.Request.Context(), id, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})
 		return
@@ -164,10 +138,7 @@ func (h *Handler) DeleteMedia(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.DeleteMedia(
-		c.Request.Context(),
-		id,
-	); err != nil {
+	if err := h.service.DeleteMedia(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
 		})

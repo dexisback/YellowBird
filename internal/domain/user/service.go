@@ -3,15 +3,16 @@ package user
 import (
 	"context"
 	"errors"
+
 	"github.com/dexisback/YellowBird/internal/auth"
-	"golang.org/x/crypto/bcrypt"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 type Service interface {
 	RegisterUser(ctx context.Context, req RegisterUserRequest) (*UserResponse, error)
-	LoginUser(ctx context.Context, req LoginUserRequest) (*UserResponse, error)
+	LoginUser(ctx context.Context, req LoginUserRequest) (*LoginResponse, error)
 	GetUser(ctx context.Context, id uuid.UUID) (*UserResponse, error)
 	ListUsers(ctx context.Context) ([]UserResponse, error)
 	DeleteUser(ctx context.Context, id uuid.UUID) error
@@ -19,7 +20,7 @@ type Service interface {
 
 type service struct {
 	repository Repository
-	jwtService   *auth.JWTService
+	jwtService *auth.JWTService
 }
 
 func NewService(repository Repository, jwtService *auth.JWTService) Service {
@@ -66,7 +67,7 @@ func (s *service) RegisterUser(ctx context.Context, req RegisterUserRequest) (*U
 	}, nil
 }
 
-func (s *service) LoginUser(ctx context.Context, req LoginUserRequest) (*UserResponse, error) {
+func (s *service) LoginUser(ctx context.Context, req LoginUserRequest) (*LoginResponse, error) {
 	user, err := s.repository.GetByEmail(ctx, req.Email)
 	if err != nil {
 		return nil, errors.New("invalid email or password")
@@ -80,12 +81,20 @@ func (s *service) LoginUser(ctx context.Context, req LoginUserRequest) (*UserRes
 		return nil, errors.New("invalid email or password")
 	}
 
-	return &UserResponse{
-		ID:        user.ID,
-		Name:      user.Name,
-		Email:     user.Email,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
+	token, err := s.jwtService.GenerateToken(user.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginResponse{
+		Token: token,
+		User: UserResponse{
+			ID:        user.ID,
+			Name:      user.Name,
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		},
 	}, nil
 }
 

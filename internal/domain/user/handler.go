@@ -24,6 +24,7 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
 		})
+		return
 	}
 
 	user, err := h.service.RegisterUser(c.Request.Context(), req)
@@ -33,9 +34,8 @@ func (h *Handler) RegisterUser(c *gin.Context) {
 		})
 		return
 	}
-	//else:
-	c.JSON(http.StatusCreated, user)
 
+	c.JSON(http.StatusCreated, user)
 }
 
 func (h *Handler) LoginUser(c *gin.Context) {
@@ -48,7 +48,7 @@ func (h *Handler) LoginUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.service.LoginUser(c.Request.Context(), req)
+	loginResponse, err := h.service.LoginUser(c.Request.Context(), req)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": err.Error(),
@@ -56,7 +56,7 @@ func (h *Handler) LoginUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, loginResponse)
 }
 
 func (h *Handler) ListUsers(c *gin.Context) {
@@ -68,7 +68,6 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		return
 	}
 
-	//else:
 	c.JSON(http.StatusOK, users)
 }
 
@@ -100,7 +99,6 @@ func (h *Handler) GetUser(c *gin.Context) {
 		return
 	}
 
-	//else:
 	user, err := h.service.GetUser(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -108,6 +106,6 @@ func (h *Handler) GetUser(c *gin.Context) {
 		})
 		return
 	}
-	//else:
+
 	c.JSON(http.StatusOK, user)
 }
