@@ -1,33 +1,8 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: yellowbird-postgres
-    restart: unless-stopped
-
-    environment:
-      POSTGRES_DB: yellowbird
-      POSTGRES_USER: yellowbird
-      POSTGRES_PASSWORD: yellowbird
-
-    ports:
-      - "5432:5432"
-
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U yellowbird -d yellowbird"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     container_name: yellowbird-redis
     restart: unless-stopped
-
-    # ports:
-    #   - "6379:6379"
 
     volumes:
       - redis_data:/data
@@ -49,7 +24,7 @@ services:
     environment:
       PORT: "8080"
 
-      DATABASE_URL: "postgres://yellowbird:yellowbird@postgres:5432/yellowbird?sslmode=disable"
+      DATABASE_URL: "${DATABASE_URL}"
 
       REDIS_ADDR: "redis:6379"
       REDIS_PASSWORD: ""
@@ -65,8 +40,6 @@ services:
       - "8080:8080"
 
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -79,7 +52,7 @@ services:
     restart: unless-stopped
 
     environment:
-      DATABASE_URL: "postgres://yellowbird:yellowbird@postgres:5432/yellowbird?sslmode=disable"
+      DATABASE_URL: "${DATABASE_URL}"
 
       REDIS_ADDR: "redis:6379"
       REDIS_PASSWORD: ""
@@ -92,11 +65,8 @@ services:
       CLOUDINARY_API_SECRET: "${CLOUDINARY_API_SECRET}"
 
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
 volumes:
-  postgres_data:
   redis_data:
