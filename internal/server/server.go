@@ -31,6 +31,7 @@ func New(cfg *config.Config, db *gorm.DB) *Server {
 	engine := gin.New() //because private , nobody outside the server package should be able to access this
 
 	engine.Use(
+		middleware.CORS(),
 		middleware.Recovery(),
 		middleware.RequestID(),
 		middleware.Logging(),
