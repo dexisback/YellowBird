@@ -273,8 +273,9 @@ YellowBird/
 
 ---
 
-## Origin & Credits
+<img width="1784" height="1004" alt="Yellowbird" src="https://github.com/user-attachments/assets/3da40bd3-bca3-4b66-9bdc-d94d29264698" />
 
-*kiiroitori (黄色い鳥)* — named after the legendary Porsche 911 930 RUF CTR "Yellowbird", renowned for raw speed, engineering discipline, and focused mechanical execution.
+*kiiroitori (黄色い鳥)* — named after the Porsche 911 930 RUF CTR "Yellowbird". The RUF CTR is known internally and model-designated by Ruf Automobile as the CTR, which stands for Group C Turbo RUF. One of my favourite pieces of art. 
 
-Crafted by **[dexisback](https://github.com/dexisback)**.
+Built with ❤️ by **amaanworks** / **dextertwts** / **dexisback**.
+
