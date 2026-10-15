@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/dexisback/YellowBird/internal/domain/job"
@@ -22,14 +23,16 @@ import (
 // new, job retry logic
 const (
 	// maxJobRetries    = 3
-	recoveryInterval = (30 * time.Second)
+	defaultConcurrency = 4
+	recoveryInterval   = (30 * time.Second)
 )
 
 type Worker struct {
-	queue      *queue.RedisQueue
-	jobService job.Service
-	registry   *Registry
-	mediaRepo  media.Repository
+	queue       *queue.RedisQueue
+	jobService  job.Service
+	registry    *Registry
+	mediaRepo   media.Repository
+	concurrency int
 }
 
 func NewWorker(
@@ -43,57 +46,94 @@ func NewWorker(
 		mr = mediaRepo[0]
 	}
 	return &Worker{
-		queue:      queue,
-		jobService: jobService,
-		registry:   registry,
-		mediaRepo:  mr,
+		queue:       queue,
+		jobService:  jobService,
+		registry:    registry,
+		mediaRepo:   mr,
+		concurrency: defaultConcurrency,
 	}
 }
 
+// WithConcurrency configures the maximum number of concurrent processing goroutines.
+func (w *Worker) WithConcurrency(concurrency int) *Worker {
+	if concurrency > 0 {
+		w.concurrency = concurrency
+	}
+	return w
+}
+
 func (w *Worker) Run(ctx context.Context) error {
-	log.Println("worker started brrr")
-	//first we gotta make sure if the redis consumer group even exists before init:
+	concurrency := w.concurrency
+	if concurrency <= 0 {
+		concurrency = defaultConcurrency
+	}
+	log.Printf("worker started with concurrency %d brrr", concurrency)
+
+	// first we gotta make sure if the redis consumer group even exists before init:
 	if err := w.queue.EnsureGroup(ctx); err != nil {
 		return err
 	}
 
-	//new: periodically recover messages abandoned by previously crashed workers
+	// periodically recover messages abandoned by previously crashed workers
 	recoveryTicker := time.NewTicker(recoveryInterval)
 	defer recoveryTicker.Stop()
+
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("worker shutting down")
+			log.Println("worker shutting down, waiting for in-flight jobs...")
+			wg.Wait()
+			log.Println("worker shutdown complete")
 			return nil
+
 		case <-recoveryTicker.C:
 			if err := w.recoverPending(ctx); err != nil {
 				log.Printf("failed to recover pending jobs: %v", err)
 			}
 			continue
-		default:
+
+		case sem <- struct{}{}:
+			// Acquired worker capacity slot
 		}
 
 		messageID, jobID, err := w.queue.Dequeue(ctx)
 		if err != nil {
+			<-sem // Release slot if dequeue failed or blocked
 			if errors.Is(err, redis.Nil) {
 				if ctx.Err() != nil {
-					log.Println("worker shutting down")
+					log.Println("worker shutting down, waiting for in-flight jobs...")
+					wg.Wait()
 					return nil
 				}
 				continue
 			}
 			if ctx.Err() != nil {
-				log.Println("worker shutting down")
+				log.Println("worker shutting down, waiting for in-flight jobs...")
+				wg.Wait()
 				return nil
 			}
 			log.Printf("failed to dequeue job: %v", err)
 			continue
 		}
 
-		if err := w.processJob(ctx, messageID, jobID); err != nil {
-			log.Printf("failed to process job %s: %v", jobID, err)
-		}
+		log.Printf("dequeued job %s (msg: %s)", jobID, messageID)
+		wg.Add(1)
+		go func(mID string, jID uuid.UUID) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+
+			jobCtx := context.WithoutCancel(ctx)
+			if err := w.processJob(jobCtx, mID, jID); err != nil {
+				log.Printf("failed to process job %s: %v", jID, err)
+			} else {
+				log.Printf("finished processing job %s", jID)
+			}
+		}(messageID, jobID)
 	}
 }
 
@@ -124,6 +164,7 @@ func (w *Worker) processJob(
 		return w.queue.MoveToDLQ(ctx, messageID, jobID, err.Error(), 0)
 	}
 
+	log.Printf("starting %s job %s (media: %s)", currentJob.Type, jobID, currentJob.MediaID)
 	if err := w.jobService.StartJob(ctx, jobID); err != nil {
 		return err
 	}
@@ -141,6 +182,8 @@ func (w *Worker) processJob(
 	if w.mediaRepo != nil {
 		_ = w.mediaRepo.SyncStatus(ctx, currentJob.MediaID)
 	}
+
+	log.Printf("successfully completed %s job %s", currentJob.Type, jobID)
 
 	//new: only ack after processing + db completion succeeded
 	if err := w.queue.Ack(ctx, messageID); err != nil {

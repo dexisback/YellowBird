@@ -27,7 +27,7 @@ graph TD
         Cloudinary[("Cloudinary Object Storage\n• Source Uploads\n• Output Renditions")]
     end
 
-    subgraph Worker Pool ["Worker Tier (cmd/worker)"]
+    subgraph Worker_Pool ["Worker Tier (cmd/worker)"]
         WorkerRuntime["Worker Runtime Loop"]
         PELRecovery["Pending Entries Recovery Loop (30s)"]
         Registry["Processor Registry"]
@@ -53,7 +53,7 @@ graph TD
     Proc_Thumb & Proc_Prev & Proc_Trans -->|Upload Artifact| Cloudinary
     Proc_Thumb & Proc_Prev & Proc_Trans -->|Insert Rendition| Postgres
 
-    WorkerRuntime -->|Job status -> completed/failed\nSyncStatus()| Postgres
+    WorkerRuntime -->|"Job status -> completed/failed<br/>SyncStatus()"| Postgres
     WorkerRuntime -->|XACK / Move to DLQ| RedisStreams
 ```
 

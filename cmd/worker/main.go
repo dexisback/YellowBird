@@ -60,22 +60,26 @@ func main() {
 		log.Fatal(err)
 	}
 
+	sourceCache := worker.NewSourceCache(cloudinaryStorage, "")
+	defer sourceCache.Close()
+
 	registry := worker.NewRegistry()
 
 	registry.Register(
-		worker.NewThumbnailProcessor(mediaRepository, cloudinaryStorage, renditionService),
+		worker.NewThumbnailProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
 	)
 
 	registry.Register(
-		worker.NewPreviewProcessor(mediaRepository, cloudinaryStorage, renditionService),
+		worker.NewPreviewProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
 	)
 
 	registry.Register(
-		worker.NewTranscodeProcessor(mediaRepository, cloudinaryStorage, renditionService),
+		worker.NewTranscodeProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
 	)
 
-	backgroundWorker := worker.NewWorker(redisQueue, jobService, registry, mediaRepository)
-	log.Println("worker booting up rahhhh 🦅🇺🇲🇺🇲🦅🦅🦅🦅...")
+	backgroundWorker := worker.NewWorker(redisQueue, jobService, registry, mediaRepository).
+		WithConcurrency(cfg.WorkerConcurrency)
+	log.Printf("worker booting up with concurrency %d rahhhh 🦅🇺🇲🇺🇲🦅🦅🦅🦅...", cfg.WorkerConcurrency)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

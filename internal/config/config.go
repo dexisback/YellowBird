@@ -20,6 +20,7 @@ type Config struct {
 	RedisAddr             string
 	RedisPassword         string
 	RedisDB               int
+	WorkerConcurrency     int
 }
 
 func Load() (*Config, error) {
@@ -43,6 +44,12 @@ func Load() (*Config, error) {
 		RedisAddr:     k.String("REDIS_ADDR"),
 		RedisPassword: k.String("REDIS_PASSWORD"),
 		RedisDB:       k.Int("REDIS_DB"),
+
+		WorkerConcurrency: k.Int("WORKER_CONCURRENCY"),
+	}
+
+	if cfg.WorkerConcurrency <= 0 {
+		cfg.WorkerConcurrency = 4
 	}
 
 	return cfg, nil

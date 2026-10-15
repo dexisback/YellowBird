@@ -16,19 +16,60 @@ type ThumbnailProcessor struct {
 	mediaRepository  media.Repository
 	storage          storage.Storage
 	renditionService rendition.Service
+	cache            *SourceCache
 }
 
-func NewThumbnailProcessor(mediaRepository media.Repository, storage storage.Storage, renditionService rendition.Service) *ThumbnailProcessor {
+func NewThumbnailProcessor(
+	mediaRepository media.Repository,
+	storage storage.Storage,
+	renditionService rendition.Service,
+	cache ...*SourceCache,
+) *ThumbnailProcessor {
+	var c *SourceCache
+	if len(cache) > 0 {
+		c = cache[0]
+	}
 	return &ThumbnailProcessor{
 		mediaRepository:  mediaRepository,
 		storage:          storage,
 		renditionService: renditionService,
+		cache:            c,
 	}
-
 }
 
 func (p *ThumbnailProcessor) Type() job.JobType {
 	return job.TypeThumbnail
+}
+
+func (p *ThumbnailProcessor) getSourceFile(ctx context.Context, storageKey, mimeType string) (string, func(), error) {
+	if p.cache != nil {
+		return p.cache.Get(ctx, storageKey, mimeType)
+	}
+
+	source, err := p.storage.Download(ctx, storageKey, mimeType)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to download media: %w", err)
+	}
+	defer source.Close()
+
+	sourceFile, err := os.CreateTemp("", "yellowbird-source-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create source temp file: %w", err)
+	}
+	sourcePath := sourceFile.Name()
+
+	if _, err := sourceFile.ReadFrom(source); err != nil {
+		_ = sourceFile.Close()
+		_ = os.Remove(sourcePath)
+		return "", nil, fmt.Errorf("failed to write source media: %w", err)
+	}
+
+	if err := sourceFile.Close(); err != nil {
+		_ = os.Remove(sourcePath)
+		return "", nil, fmt.Errorf("failed to close source media: %w", err)
+	}
+
+	return sourcePath, func() { _ = os.Remove(sourcePath) }, nil
 }
 
 func (p *ThumbnailProcessor) Process(ctx context.Context, j *job.Job) error {
@@ -37,41 +78,26 @@ func (p *ThumbnailProcessor) Process(ctx context.Context, j *job.Job) error {
 		return fmt.Errorf("failed to get media: %w", err)
 	}
 
-	source, err := p.storage.Download(ctx, mediaFile.StorageKey, mediaFile.MimeType)
+	sourcePath, release, err := p.getSourceFile(ctx, mediaFile.StorageKey, mediaFile.MimeType)
 	if err != nil {
-		return fmt.Errorf("failed to download media: %w", err)
-
+		return err
 	}
-	defer source.Close()
+	defer release()
 
-	sourceFile, err := os.CreateTemp("", "yellowbird-source-*")
-	if err != nil {
-		return fmt.Errorf("failed to create source temp file: %w", err)
-
-	}
-
-	defer func() {
-		sourceFile.Close()
-		os.Remove(sourceFile.Name())
-	}()
-
-	if _, err := sourceFile.ReadFrom(source); err != nil {
-		return fmt.Errorf("failed to write source media: %w", err)
-	}
-	sourcePath := sourceFile.Name()
 	outputFile, err := os.CreateTemp("", "yellowbird-*.jpg")
 	if err != nil {
 		return fmt.Errorf("failed to create thumbnail temp file: %w", err)
-
 	}
 	outputPath := outputFile.Name()
 	outputFile.Close()
 	defer os.Remove(outputPath)
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", sourcePath,
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-threads", "0",
+		"-i", sourcePath,
 		"-frames:v", "1",
 		"-q:v", "2",
-		outputPath) //thumbnnail generator command
+		outputPath) // thumbnail generator command
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg thumbnail generation failed: %w; output: %s", err, string(output))
 	}

@@ -48,7 +48,6 @@ services:
       context: ..
       dockerfile: deployments/Dockerfile.worker
 
-    container_name: yellowbird-worker
     restart: unless-stopped
 
     environment:
@@ -63,6 +62,8 @@ services:
       CLOUDINARY_CLOUD_NAME: "${CLOUDINARY_CLOUD_NAME}"
       CLOUDINARY_API_KEY: "${CLOUDINARY_API_KEY}"
       CLOUDINARY_API_SECRET: "${CLOUDINARY_API_SECRET}"
+
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-4}"
 
     depends_on:
       redis:

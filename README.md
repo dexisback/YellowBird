@@ -61,13 +61,13 @@ YellowBird separates responsibility across storage, coordination, state, and exe
 flowchart TD
     Client(["HTTP Client"]) -->|Multipart Upload / REST| API["API Server (cmd/api)"]
 
-    subgraph Storage & State
+    subgraph Storage_State ["Storage & State"]
         DB[("PostgreSQL\n(Durable State / ACID)")]
         Redis[("Redis Streams\n(yellowbird:jobs)")]
         Cloudinary[("Cloudinary\n(Object Storage)")]
     end
 
-    subgraph Worker Subsystem ["Worker Subsystem (cmd/worker)"]
+    subgraph Worker_Subsystem ["Worker Subsystem (cmd/worker)"]
         W1["Worker Process 1\n(Consumer: host-pid)"]
         W2["Worker Process 2\n(Consumer: host-pid)"]
         Registry["Processor Registry"]
@@ -209,10 +209,10 @@ flowchart TD
     J -->|No| H
     J -->|Yes| K{"Delivery Count >= 3?"}
     
-    K -->|No (Delivery 2, 3)| L["XCLAIM message by active worker"]
+    K -->|"No (Delivery 2, 3)"| L["XCLAIM message by active worker"]
     L --> B
     
-    K -->|Yes (Exhausted)| M["DB: fail job ('max retry limit reached')"]
+    K -->|"Yes (Exhausted)"| M["DB: fail job ('max retry limit reached')"]
     M --> N["Sync Media Status (media -> failed)"]
     N --> O["XADD to yellowbird:jobs:dlq"]
     O --> P["XACK original message from main stream"]
@@ -370,26 +370,26 @@ YellowBird/
 
 ```mermaid
 flowchart TD
-    subgraph Presentation & Routing
+    subgraph Presentation_Routing ["Presentation & Routing"]
         API_Main["cmd/api/main.go"] --> Server["internal/server"]
         Server --> Middleware["internal/server/middleware\n(Auth, RequestID, Recovery, Logging)"]
         Server --> Handlers["Domain Handlers\n(user, project, media, job, rendition)"]
     end
 
-    subgraph Business Logic ["Domain Layer (internal/domain)"]
+    subgraph Domain_Layer ["Domain Layer (internal/domain)"]
         Handlers --> Services["Domain Services\n(user, project, media, job, rendition)"]
         Services --> Repositories["Domain Repositories\n(GORM / SQL)"]
         media_svc["media.Service"] -->|Job Fan-Out| job_svc["job.Service"]
     end
 
-    subgraph Infrastructure Layer
+    subgraph Infrastructure_Layer ["Infrastructure Layer"]
         job_svc --> Queue["internal/queue\n(Redis Streams)"]
         media_svc --> Storage["internal/storage\n(Cloudinary)"]
         Repositories --> DB_Pkg["internal/db\n(PostgreSQL Pool)"]
         Services --> Auth_Pkg["internal/auth\n(JWT & Bcrypt)"]
     end
 
-    subgraph Worker Runtime
+    subgraph Worker_Runtime ["Worker Runtime"]
         Worker_Main["cmd/worker/main.go"] --> Worker["internal/worker\n(Worker Loop & DLQ)"]
         Worker --> Registry["internal/worker.Registry"]
         Registry --> Processors["Processors\n(Thumbnail, Preview, Transcode)"]
@@ -524,6 +524,10 @@ go build -o /dev/null ./cmd/worker
 - [x] 30s background recovery loop claiming abandoned jobs ($> 5\text{ min}$ idle).
 - [x] PostgreSQL media status lifecycle (`uploaded` $\rightarrow$ `processing` $\rightarrow$ `ready` / `failed`) with row-level transaction locks.
 - [x] Idiomatic graceful shutdown (`signal.NotifyContext`) for API and Worker.
+- [x] Worker goroutine pool with bounded, configurable concurrency (`WORKER_CONCURRENCY`).
+- [x] Multi-worker replica scaling support in Docker Compose without container name collisions.
+- [x] Thread-safe local source caching (`SourceCache`) with `singleflight` deduplication and TTL eviction.
+- [x] Optimized FFmpeg encoding parameters (`-preset veryfast`, `-threads 0`) for rapid CPU transcoding.
 - [x] Multi-tier test suite (Unit, Race, Integration with testcontainers, E2E with real FFmpeg).
 
 ### Future Systems-Engineering Experiments

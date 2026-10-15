@@ -36,5 +36,5 @@ Thumbs.db
 *.out
 
 # Local binaries
-api
-worker
+/api
+/worker
