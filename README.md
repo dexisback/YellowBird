@@ -34,6 +34,7 @@ The project serves as a real-world systems-engineering playground exploring resi
   - [Running with Docker Compose](#running-with-docker-compose)
   - [Running Locally (Bare Metal)](#running-locally-bare-metal)
 - [Testing Strategy](#testing-strategy)
+  - [Continuous Integration (CI)](#continuous-integration-ci)
 - [Roadmap](#roadmap)
   - [Currently Implemented](#currently-implemented)
   - [Future Systems-Engineering Experiments](#future-systems-engineering-experiments)
@@ -59,17 +60,17 @@ YellowBird separates responsibility across storage, coordination, state, and exe
 
 ```mermaid
 flowchart TD
-    Client(["HTTP Client"]) -->|Multipart Upload / REST| API["API Server (cmd/api)"]
+    Client(["HTTP Client"]) -->|"Multipart Upload / REST"| API["API Server (cmd/api)"]
 
     subgraph Storage_State ["Storage & State"]
-        DB[("PostgreSQL\n(Durable State / ACID)")]
-        Redis[("Redis Streams\n(yellowbird:jobs)")]
-        Cloudinary[("Cloudinary\n(Object Storage)")]
+        DB[("PostgreSQL<br/>(Durable State / ACID)")]
+        Redis[("Redis Streams<br/>(yellowbird:jobs)")]
+        Cloudinary[("Cloudinary<br/>(Object Storage)")]
     end
 
     subgraph Worker_Subsystem ["Worker Subsystem (cmd/worker)"]
-        W1["Worker Process 1\n(Consumer: host-pid)"]
-        W2["Worker Process 2\n(Consumer: host-pid)"]
+        W1["Worker Process 1<br/>(Consumer: host-pid)"]
+        W2["Worker Process 2<br/>(Consumer: host-pid)"]
         Registry["Processor Registry"]
         P_Thumb["Thumbnail Processor"]
         P_Prev["Preview Processor"]
@@ -77,23 +78,23 @@ flowchart TD
         FFmpeg[["FFmpeg Engine"]]
     end
 
-    API -->|1. Store Raw Upload| Cloudinary
-    API -->|2. Insert Media & Jobs| DB
-    API -->|3. XADD Job ID| Redis
+    API -->|"1. Store Raw Upload"| Cloudinary
+    API -->|"2. Insert Media & Jobs"| DB
+    API -->|"3. XADD Job ID"| Redis
 
-    Redis -->|4. XREADGROUP| W1
-    Redis -->|4. XREADGROUP| W2
+    Redis -->|"4. XREADGROUP"| W1
+    Redis -->|"4. XREADGROUP"| W2
 
-    W1 & W2 -->|5. Dispatch by Job Type| Registry
+    W1 & W2 -->|"5. Dispatch by Job Type"| Registry
     Registry --> P_Thumb & P_Prev & P_Trans
 
-    P_Thumb & P_Prev & P_Trans -->|6. Download Source| Cloudinary
-    P_Thumb & P_Prev & P_Trans -->|7. Execute Transcode/Extract| FFmpeg
-    FFmpeg -->|8. Upload Rendition| Cloudinary
-    P_Thumb & P_Prev & P_Trans -->|9. Insert Rendition Record| DB
+    P_Thumb & P_Prev & P_Trans -->|"6. Download Source"| Cloudinary
+    P_Thumb & P_Prev & P_Trans -->|"7. Execute Transcode/Extract"| FFmpeg
+    FFmpeg -->|"8. Upload Rendition"| Cloudinary
+    P_Thumb & P_Prev & P_Trans -->|"9. Insert Rendition Record"| DB
 
-    W1 & W2 -->|10. Update Job Status & Sync Media| DB
-    W1 & W2 -->|11. XACK / Move to DLQ| Redis
+    W1 & W2 -->|"10. Update Job Status & Sync Media"| DB
+    W1 & W2 -->|"11. XACK / Move to DLQ"| Redis
 ```
 
 ---
@@ -116,7 +117,7 @@ flowchart TD
 
 4. **Worker Consumption**:
    - Background workers listening on consumer group `yellowbird-workers` claim jobs via `XREADGROUP`.
-   - The worker marks the job as `running` in PostgreSQL and triggers `mediaRepository.SyncStatus()`, transitioning the parent media from `uploaded` $\rightarrow$ `processing`.
+   - The worker marks the job as `running` in PostgreSQL and triggers `mediaRepository.SyncStatus()`, transitioning the parent media from `uploaded` → `processing`.
 
 5. **FFmpeg Execution & Rendition Upload**:
    - The worker retrieves the processor registered for the job type (`thumbnail`, `preview`, or `transcode`).
@@ -175,7 +176,7 @@ YellowBird uses Redis Streams for distributed, at-least-once job delivery withou
 - **Claim Timeout (Idle)**: 5 minutes
 - **Recovery Interval**: 30 seconds
 
-```
+```text
 [API] --- XADD ---> [yellowbird:jobs Stream]
                           │
             ┌─────────────┴─────────────┐
@@ -198,7 +199,7 @@ flowchart TD
     B --> C{"FFmpeg / Processor Result"}
     
     C -->|Success| D["DB: completed"]
-    D --> E["Sync Media Status (all done? -> ready)"]
+    D --> E["Sync Media Status (all done? → ready)"]
     E --> F["XACK Message"]
     
     C -->|Failure| G["DB: reset status to queued"]
@@ -213,19 +214,27 @@ flowchart TD
     L --> B
     
     K -->|"Yes (Exhausted)"| M["DB: fail job ('max retry limit reached')"]
-    M --> N["Sync Media Status (media -> failed)"]
+    M --> N["Sync Media Status (media → failed)"]
     N --> O["XADD to yellowbird:jobs:dlq"]
     O --> P["XACK original message from main stream"]
 ```
 
 1. **At-Least-Once Delivery**: When a worker dequeues a message, Redis moves it to the **Pending Entries List (PEL)**. It remains there until explicitly acknowledged.
 2. **Transient Failures**: If processing fails, `handleJobFailure()` resets the PostgreSQL job status from `running` back to `queued` and leaves the message pending in Redis.
-3. **Recovery of Abandoned Messages**: If a worker process crashes mid-job, the message stays idle in the PEL. Every 30 seconds, `Worker.recoverPending()` inspects the PEL for messages idle for $\ge 5\text{ minutes}$ and claims them via `XCLAIM`.
+3. **Recovery of Abandoned Messages**: If a worker process crashes mid-job, the message stays idle in the PEL. Every 30 seconds, `Worker.recoverPending()` inspects the PEL for messages idle for ≥ 5 minutes and claims them via `XCLAIM`.
 4. **Dead-Letter Queue (DLQ)**: Once a message reaches 3 delivery attempts (`deliveryCount >= 3`), it is quarantined:
    - The job is marked `failed` in PostgreSQL.
    - `mediaRepository.SyncStatus()` transitions the parent media to `failed`.
    - The job is written to `yellowbird:jobs:dlq` with its error context and delivery count.
    - The original message is acknowledged (`XACK`) and removed from `yellowbird:jobs`.
+
+### Crash Recovery Loop
+
+The background recovery routine runs continuously in `Worker.recoverPending()`:
+- **Polling Interval**: Runs every 30 seconds via a background ticker.
+- **Idle Threshold**: Targets messages in the PEL that have remained idle for at least 5 minutes without an `XACK`.
+- **Claim & Re-drive**: Abandoned messages under the retry threshold are claimed via `XCLAIM` by an active worker and re-processed.
+- **DLQ Escalation**: Messages exceeding the max delivery count (3 attempts) are moved to `yellowbird:jobs:dlq` and acknowledged from the main stream.
 
 ### Graceful Shutdown
 
@@ -257,7 +266,8 @@ All responses return standard JSON. Endpoints marked **Protected** require the H
 | `GET` | `/api/v1/users/:id` | Public | Fetch user profile by UUID. |
 | `DELETE` | `/api/v1/users/:id` | Public | Remove a user account. |
 
-#### Sample Login Response:
+#### Sample Login Response
+
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -291,7 +301,8 @@ All responses return standard JSON. Endpoints marked **Protected** require the H
 | `PUT` | `/api/v1/media/:id` | Protected | Update media attributes. |
 | `DELETE` | `/api/v1/media/:id` | Protected | Delete media record. |
 
-#### Upload Multipart Payload:
+#### Upload Multipart Payload
+
 - `project_id`: UUID of the parent project (form value).
 - `file`: The binary media file (`multipart/form-data`).
 
@@ -304,7 +315,8 @@ All responses return standard JSON. Endpoints marked **Protected** require the H
 | `GET` | `/api/v1/jobs/:id` | Protected | Get specific job status and error logs. |
 | `DELETE` | `/api/v1/jobs/:id` | Protected | Delete a job entry. |
 
-#### Create Job Payload:
+#### Create Job Payload
+
 ```json
 {
   "media_id": "7bf3b6e8-2512-4c28-98e3-514782bb0dc1",
@@ -332,7 +344,7 @@ All responses return standard JSON. Endpoints marked **Protected** require the H
 
 ## Repository Structure
 
-```
+```text
 YellowBird/
 ├── cmd/
 │   ├── api/                  # API entrypoint (HTTP server, router wiring, graceful shutdown)
@@ -371,32 +383,53 @@ YellowBird/
 ```mermaid
 flowchart TD
     subgraph Presentation_Routing ["Presentation & Routing"]
-        API_Main["cmd/api/main.go"] --> Server["internal/server"]
-        Server --> Middleware["internal/server/middleware\n(Auth, RequestID, Recovery, Logging)"]
-        Server --> Handlers["Domain Handlers\n(user, project, media, job, rendition)"]
+        API_Main["cmd/api/main.go"]
+        Server["internal/server"]
+        Middleware["internal/server/middleware<br/>(Auth, RequestID, Recovery, Logging)"]
+        Handlers["Domain Handlers<br/>(user, project, media, job, rendition)"]
+
+        API_Main --> Server
+        Server --> Middleware
+        Server --> Handlers
     end
 
     subgraph Domain_Layer ["Domain Layer (internal/domain)"]
-        Handlers --> Services["Domain Services\n(user, project, media, job, rendition)"]
-        Services --> Repositories["Domain Repositories\n(GORM / SQL)"]
-        media_svc["media.Service"] -->|Job Fan-Out| job_svc["job.Service"]
+        Services["Domain Services<br/>(user, project, media, job, rendition)"]
+        Repositories["Domain Repositories<br/>(GORM / SQL)"]
+        media_svc["media.Service"]
+        job_svc["job.Service"]
+
+        Services --> Repositories
+        media_svc -->|"Job Fan-Out"| job_svc
     end
 
     subgraph Infrastructure_Layer ["Infrastructure Layer"]
-        job_svc --> Queue["internal/queue\n(Redis Streams)"]
-        media_svc --> Storage["internal/storage\n(Cloudinary)"]
-        Repositories --> DB_Pkg["internal/db\n(PostgreSQL Pool)"]
-        Services --> Auth_Pkg["internal/auth\n(JWT & Bcrypt)"]
+        Queue["internal/queue<br/>(Redis Streams)"]
+        Storage["internal/storage<br/>(Cloudinary)"]
+        DB_Pkg["internal/db<br/>(PostgreSQL Pool)"]
+        Auth_Pkg["internal/auth<br/>(JWT & Bcrypt)"]
     end
 
     subgraph Worker_Runtime ["Worker Runtime"]
-        Worker_Main["cmd/worker/main.go"] --> Worker["internal/worker\n(Worker Loop & DLQ)"]
-        Worker --> Registry["internal/worker.Registry"]
-        Registry --> Processors["Processors\n(Thumbnail, Preview, Transcode)"]
-        Processors --> FFmpeg_Exec[["FFmpeg Exec / Local Temp"]]
-        Processors --> Storage
-        Processors --> Repositories
+        Worker_Main["cmd/worker/main.go"]
+        Worker["internal/worker<br/>(Worker Loop & DLQ)"]
+        Registry["internal/worker.Registry"]
+        Processors["Processors<br/>(Thumbnail, Preview, Transcode)"]
+        FFmpeg_Exec[["FFmpeg Exec / Local Temp"]]
+
+        Worker_Main --> Worker
+        Worker --> Registry
+        Registry --> Processors
+        Processors --> FFmpeg_Exec
     end
+
+    Handlers --> Services
+    job_svc --> Queue
+    media_svc --> Storage
+    Repositories --> DB_Pkg
+    Services --> Auth_Pkg
+    Processors --> Storage
+    Processors --> Repositories
 ```
 
 ---
@@ -474,7 +507,7 @@ The repository employs a multi-tiered testing strategy:
 | **Race Detector** | Verifies zero data races across concurrent queues and workers | None | `go test -race ./internal/...` |
 | **Static Analysis** | Go static analysis and compiler vetting | None | `go vet ./...`<br>`make vet` |
 | **Integration Tests** | Tests real PostgreSQL transactions, row locking (`SELECT FOR UPDATE`), and Redis streams | Docker (testcontainers) | `go test -tags=integration ./...`<br>`make test-integration` |
-| **End-to-End (E2E)** | Full lifecycle from upload $\rightarrow$ stream $\rightarrow$ real FFmpeg execution $\rightarrow$ rendition | Docker + FFmpeg | `go test -tags=e2e ./tests/e2e/...`<br>`make test-e2e` |
+| **End-to-End (E2E)** | Full lifecycle from upload → stream → real FFmpeg execution → rendition | Docker + FFmpeg | `go test -tags=e2e ./tests/e2e/...`<br>`make test-e2e` |
 
 To run the complete test suite across all tiers:
 
@@ -507,7 +540,6 @@ go build -o /dev/null ./cmd/api
 go build -o /dev/null ./cmd/worker
 ```
 
-
 ---
 
 ## Roadmap
@@ -521,8 +553,8 @@ go build -o /dev/null ./cmd/worker
 - [x] Redis Streams consumer groups with per-worker consumer identities.
 - [x] FFmpeg media processing pipeline for video scaling and image extraction.
 - [x] 3-attempt retry semantics and Dead-Letter Queue (`yellowbird:jobs:dlq`).
-- [x] 30s background recovery loop claiming abandoned jobs ($> 5\text{ min}$ idle).
-- [x] PostgreSQL media status lifecycle (`uploaded` $\rightarrow$ `processing` $\rightarrow$ `ready` / `failed`) with row-level transaction locks.
+- [x] 30s background recovery loop claiming abandoned jobs (> 5 min idle).
+- [x] PostgreSQL media status lifecycle (`uploaded` → `processing` → `ready` / `failed`) with row-level transaction locks.
 - [x] Idiomatic graceful shutdown (`signal.NotifyContext`) for API and Worker.
 - [x] Worker goroutine pool with bounded, configurable concurrency (`WORKER_CONCURRENCY`).
 - [x] Multi-worker replica scaling support in Docker Compose without container name collisions.
@@ -535,7 +567,7 @@ go build -o /dev/null ./cmd/worker
 - [ ] **Dynamic Horizontal Worker Autoscaling**: KEDA or custom scaler reacting dynamically to Redis stream pending queue depth.
 - [ ] **Job Prioritization & Quality-Aware Encoding**: Priority lanes for thumbnail/preview vs expensive 1080p transcodes.
 - [ ] **Adaptive Source-Driven Transcoding**: Inspect source bitrate/resolution using `ffprobe` to skip unnecessary upscaling.
-- [ ] **Distributed Tracing & Metrics**: OpenTelemetry spans propagating across HTTP request $\rightarrow$ Redis stream $\rightarrow$ Worker FFmpeg execution.
+- [ ] **Distributed Tracing & Metrics**: OpenTelemetry spans propagating across HTTP request → Redis stream → Worker FFmpeg execution.
 - [ ] **Multi-Node Consumer Metrics**: Prometheus metrics exporter for worker processing latency, PEL size, and DLQ rates.
 - [ ] **ML-Based Frame Selection**: Intelligent scene-detection for keyframe thumbnail selection.
 
