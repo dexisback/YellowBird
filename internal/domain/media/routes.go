@@ -15,10 +15,11 @@ func RegisterRoutes(
 	media.Use(middleware.Auth(jwtService))
 
 	{
-		media.POST("", handler.CreateMedia)
+		media.POST("/upload", handler.UploadMedia)
 		media.GET("", handler.ListMedia)
 		media.GET("/:id", handler.GetMedia)
-		media.PUT("/:id", handler.UpdateMedia)
 		media.DELETE("/:id", handler.DeleteMedia)
 	}
 }
+
+//registers all media endpoints and protects them with JWT authentication
