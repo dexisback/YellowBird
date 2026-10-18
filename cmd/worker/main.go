@@ -55,26 +55,26 @@ func main() {
 	renditionRepository := rendition.NewRepository(db)
 	renditionService := rendition.NewService(renditionRepository)
 
-	cloudinaryStorage, err := storage.NewCloudinaryStorage(cfg.CLOUDINARY_CLOUD_NAME, cfg.CLOUDINARY_API_KEY, cfg.CLOUDINARY_API_SECRET)
+	store, err := storage.InitStorage(context.Background(), cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	sourceCache := worker.NewSourceCache(cloudinaryStorage, "")
+	sourceCache := worker.NewSourceCache(store, "")
 	defer sourceCache.Close()
 
 	registry := worker.NewRegistry()
 
 	registry.Register(
-		worker.NewThumbnailProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
+		worker.NewThumbnailProcessor(mediaRepository, store, renditionService, sourceCache),
 	)
 
 	registry.Register(
-		worker.NewPreviewProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
+		worker.NewPreviewProcessor(mediaRepository, store, renditionService, sourceCache),
 	)
 
 	registry.Register(
-		worker.NewTranscodeProcessor(mediaRepository, cloudinaryStorage, renditionService, sourceCache),
+		worker.NewTranscodeProcessor(mediaRepository, store, renditionService, sourceCache),
 	)
 
 	backgroundWorker := worker.NewWorker(redisQueue, jobService, registry, mediaRepository).

@@ -15,7 +15,8 @@ func RegisterRoutes(
 	media.Use(middleware.Auth(jwtService))
 
 	{
-		media.POST("/upload", handler.UploadMedia)
+		media.POST("", handler.CreateMedia)
+		media.POST("/upload", handler.CreateMedia)
 		media.GET("", handler.ListMedia)
 		media.GET("/:id", handler.GetMedia)
 		media.DELETE("/:id", handler.DeleteMedia)

@@ -3,6 +3,7 @@ package server
 //we still import net/http, because we dont wanna write statusCodes as literal numbers but rather use the functionality of writing http.something soemthing
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/dexisback/YellowBird/internal/auth"
@@ -52,13 +53,13 @@ func (s *Server) registerRoutes() {
 	job.RegisterRoutes(api, jobHandler, jwtService)
 
 	mediaRepository := media.NewRepository(s.db)
-	cloudinaryStorage, err := storage.NewCloudinaryStorage(s.config.CLOUDINARY_CLOUD_NAME, s.config.CLOUDINARY_API_KEY, s.config.CLOUDINARY_API_SECRET)
+	store, err := storage.InitStorage(context.Background(), s.config)
 	if err != nil {
 		panic(err)
 	}
 
 	//media kundli:
-	mediaService := media.NewService(mediaRepository, projectRepository, cloudinaryStorage, jobService)
+	mediaService := media.NewService(mediaRepository, projectRepository, store, jobService)
 	mediaHandler := media.NewHandler(mediaService)
 	media.RegisterRoutes(api, mediaHandler, jwtService)
 }

@@ -1,9 +1,10 @@
 # Environment
 .env
-ecs-fargate-implementation.md
-automated-cicd-guide.md
-ec2-ecr-worker-snapshot.md    #snapshot for dbms proejct report
-ec2-ecr-worker-snapshot.md
+
+# dev docs:
+local-docs/*
+
+
 # Binaries
 /bin/
 /dist/
