@@ -55,9 +55,14 @@ func Load() (*Config, error) {
 		s3Region = "us-east-1"
 	}
 
+	databaseURL := k.String("DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = k.String("NEON_DB")
+	}
+
 	cfg := &Config{
 		Port:        k.String("PORT"),
-		DatabaseURL: k.String("DATABASE_URL"),
+		DatabaseURL: databaseURL,
 		JWT_SECRET:  k.String("JWT_SECRET"),
 
 		CLOUDINARY_CLOUD_NAME: k.String("CLOUDINARY_CLOUD_NAME"),
