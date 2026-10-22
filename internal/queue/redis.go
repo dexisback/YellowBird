@@ -4,8 +4,10 @@ package queue
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	// "github.com/dexisback/YellowBird/internal/domain/job"
@@ -30,12 +32,30 @@ type RedisQueue struct {
 }
 
 func NewRedisQueue(addr string, password string, db int, consumer string) *RedisQueue {
-	return &RedisQueue{
-		client: redis.NewClient(&redis.Options{
+	var opts *redis.Options
+
+	if strings.HasPrefix(addr, "redis://") || strings.HasPrefix(addr, "rediss://") {
+		parsed, err := redis.ParseURL(addr)
+		if err == nil {
+			opts = parsed
+		}
+	}
+
+	if opts == nil {
+		opts = &redis.Options{
 			Addr:     addr,
 			Password: password,
 			DB:       db,
-		}),
+		}
+		if strings.Contains(addr, "upstash.io") {
+			opts.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+		}
+	}
+
+	return &RedisQueue{
+		client:   redis.NewClient(opts),
 		consumer: consumer,
 	}
 }

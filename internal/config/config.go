@@ -60,8 +60,13 @@ func Load() (*Config, error) {
 		databaseURL = k.String("NEON_DB")
 	}
 
+	port := strings.TrimSpace(k.String("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+
 	cfg := &Config{
-		Port:        k.String("PORT"),
+		Port:        port,
 		DatabaseURL: databaseURL,
 		JWT_SECRET:  k.String("JWT_SECRET"),
 
