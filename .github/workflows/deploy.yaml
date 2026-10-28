@@ -1,0 +1,134 @@
+   name: Deploy YellowBird to AWS ECS Fargate
+
+    on:
+      push:
+        branches:
+          - main
+
+    # Required for AWS IAM OIDC Federation
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: us-east-1
+      ROLE_TO_ASSUME: arn:aws:iam::056126811138:role/yellowbird-github-actions-role
+      ECS_CLUSTER: yellowbird-cluster
+      API_SERVICE: yellowbird-api-service
+      WORKER_SERVICE: yellowbird-worker-service
+
+    jobs:
+      # ----------------------------------------------------
+      # Stage 1: Automated Quality Gate (Hermetic Tests)
+      # ----------------------------------------------------
+      test:
+        name: 1. Quality Gate & Race Detection
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout Code
+            uses: actions/checkout@v4
+
+          - name: Setup Go
+            uses: actions/setup-go@v5
+            with:
+              go-version-file: go.mod
+              cache: true
+
+          - name: Install System Dependencies (FFmpeg)
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y ffmpeg
+
+          - name: Run Hermetic Unit Tests & Race Detection
+            run: |
+              go test -count=1 ./...
+              go test -race -v ./internal/...
+
+      # ----------------------------------------------------
+      # Stage 2: Build, Push & Zero-Downtime ECS Deploy
+      # ----------------------------------------------------
+      deploy:
+        name: 2. Build & Deploy to ECS Fargate
+        needs: test
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout Code
+            uses: actions/checkout@v4
+
+          # Passwordless AWS Authentication via OIDC
+          - name: Configure AWS Credentials via OIDC
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+              aws-region: ${{ env.AWS_REGION }}
+              audience: sts.amazonaws.com
+
+          - name: Log in to Amazon ECR
+            id: login-ecr
+            uses: aws-actions/amazon-ecr-login@v2
+
+          # Compile and push API Docker Image with immutable Git SHA
+          - name: Build & Push API Image
+            env:
+              REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              IMAGE_TAG: ${{ github.sha }}
+            run: |
+              docker build \
+                -f deployments/Dockerfile.api \
+                -t $REGISTRY/yellowbird-api:$IMAGE_TAG \
+                -t $REGISTRY/yellowbird-api:latest \
+                .
+              docker push $REGISTRY/yellowbird-api:$IMAGE_TAG
+              docker push $REGISTRY/yellowbird-api:latest
+              echo "api_image=$REGISTRY/yellowbird-api:$IMAGE_TAG" >> $GITHUB_ENV
+
+          # Compile and push Worker Docker Image with immutable Git SHA
+          - name: Build & Push Worker Image
+            env:
+              REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+              IMAGE_TAG: ${{ github.sha }}
+            run: |
+              docker build \
+                -f deployments/Dockerfile.worker \
+                -t $REGISTRY/yellowbird-worker:$IMAGE_TAG \
+                -t $REGISTRY/yellowbird-worker:latest \
+                .
+              docker push $REGISTRY/yellowbird-worker:$IMAGE_TAG
+              docker push $REGISTRY/yellowbird-worker:latest
+              echo "worker_image=$REGISTRY/yellowbird-worker:$IMAGE_TAG" >> $GITHUB_ENV
+
+          # Render updated Task Definition for API
+          - name: Render API Task Definition
+            id: render-api
+            uses: aws-actions/amazon-ecs-render-task-definition@v1
+            with:
+              task-definition: deployments/task-definition-api.json
+              container-name: api
+              image: ${{ env.api_image }}
+
+          # Render updated Task Definition for Worker
+          - name: Render Worker Task Definition
+            id: render-worker
+            uses: aws-actions/amazon-ecs-render-task-definition@v1
+            with:
+              task-definition: deployments/task-definition-worker.json
+              container-name: worker
+              image: ${{ env.worker_image }}
+
+          # Deploy API Service (Awaits ALB target health check!)
+          - name: Deploy API Service to ECS Fargate
+            uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+            with:
+              task-definition: ${{ steps.render-api.outputs.task-definition }}
+              service: ${{ env.API_SERVICE }}
+              cluster: ${{ env.ECS_CLUSTER }}
+              wait-for-service-stability: true
+
+          # Deploy Worker Service
+          - name: Deploy Worker Service to ECS Fargate
+            uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+            with:
+              task-definition: ${{ steps.render-worker.outputs.task-definition }}
+              service: ${{ env.WORKER_SERVICE }}
+              cluster: ${{ env.ECS_CLUSTER }}
+              wait-for-service-stability: true
