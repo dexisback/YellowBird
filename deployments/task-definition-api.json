@@ -1,0 +1,58 @@
+{
+  "family": "yellowbird-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::056126811138:role/yellowbird-ecs-exec-role",
+  "taskRoleArn": "arn:aws:iam::056126811138:role/yellowbird-ecs-task-role",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "056126811138.dkr.ecr.us-east-1.amazonaws.com/yellowbird-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "APP_ENV", "value": "production" },
+        { "name": "STORAGE_PROVIDER", "value": "s3" },
+        { "name": "S3_BUCKET", "value": "yellowbird-media-amaan" },
+        { "name": "S3_REGION", "value": "us-east-1" },
+        { "name": "REDIS_ADDR", "value": "chief-aardvark-159591.upstash.io:6379" },
+        { "name": "REDIS_DB", "value": "0" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:056126811138:parameter/yellowbird/production/database-url"
+        },
+        {
+          "name": "REDIS_PASSWORD",
+          "valueFrom": "arn:aws:ssm:us-east-1:056126811138:parameter/yellowbird/production/redis-password"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:ssm:us-east-1:056126811138:parameter/yellowbird/production/jwt-secret"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/yellowbird-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
