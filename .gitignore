@@ -41,3 +41,14 @@ Thumbs.db
 # Local binaries
 /api
 /worker
+
+# Local academic / report assets (untracked)
+3rd Year Course List_FINAL.xlsx
+CLOUD ARCHITECTURE AND DESIGN 1.docx
+Curriculum_Student_BTECH-BIT-2024_24BIT0616_2026-10-28_00-24-34.pdf
+YELLOWBIRD_CLOUD_ARCHITECTURE_AND_DESIGN_REPORT.docx
+YELLOWBIRD_CLOUD_ARCHITECTURE_AND_DESIGN_REPORT.pdf
+finalreview.mp4
+generate_academic_report_v5.py
+photos/
+test-video.mp4
