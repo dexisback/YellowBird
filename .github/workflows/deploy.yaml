@@ -102,7 +102,7 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: deployments/task-definition-api.json
-          container-name: api
+          container-name: yellowbird-api-container
           image: ${{ env.api_image }}
 
       # Render updated Task Definition for Worker
@@ -111,7 +111,7 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: deployments/task-definition-worker.json
-          container-name: worker
+          container-name: yellowbird-worker-container
           image: ${{ env.worker_image }}
 
       # Deploy API Service (Awaits ALB target health check!)

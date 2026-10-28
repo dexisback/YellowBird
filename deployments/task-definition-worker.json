@@ -10,7 +10,7 @@
   "taskRoleArn": "arn:aws:iam::056126811138:role/yellowbird-ecs-task-role",
   "containerDefinitions": [
     {
-      "name": "worker",
+      "name": "yellowbird-worker-container",
       "image": "056126811138.dkr.ecr.us-east-1.amazonaws.com/yellowbird-worker:latest",
       "essential": true,
       "portMappings": [],
